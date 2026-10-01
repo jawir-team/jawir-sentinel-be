@@ -212,7 +212,7 @@ internal/workflow/
 
 ### `internal/audit`
 
-- append-only audit event
+- audit event append-only
 - case history
 - audit serialization
 
@@ -1217,7 +1217,7 @@ UNIQUE(event_type, analysis_id)
 
 Outbox row dibuat secara atomic bersama GENERATING analysis. Dispatcher mem-publish persistent message dengan `message_id=outbox.id`, menunggu publisher confirm, lalu menandai PUBLISHED.
 
-Duplicate publish/redelivery diperbolehkan. Worker melakukan claim pada GENERATING analysis menggunakan `worker_attempt_id + worker_started_at`; finalization wajib cocok dengan claim saat ini. Fresh duplicate delivery saat active non-stale claim masih berlaku menjadi no-op, sedangkan redelivery/stale-lease recovery memutar claim token agar pekerjaan lama kehilangan write authority.
+Duplicate publish/redelivery diperbolehkan. Worker melakukan claim pada GENERATING analysis menggunakan `worker_attempt_id + worker_started_at`; finalization wajib cocok dengan claim saat ini. Duplicate delivery baru saat active non-stale claim masih berlaku menjadi no-op, sedangkan redelivery/stale-lease recovery memutar claim token agar pekerjaan lama kehilangan write authority.
 
 ---
 
@@ -2216,7 +2216,7 @@ target DRAFT version → ACTIVE
 audit events written
 ```
 
-Chunking/embedding dilakukan sebelum final activation. READY/FAILED updates require the current index_attempt_id. PROCESSING older than POLICY_INDEX_LEASE_SECONDS may be reclaimed with a new attempt token; late old attempts cannot finalize. Final activation revalidates DRAFT + READY + effective NOW before superseding current ACTIVE. Future/expired activation is rejected. External Vertex calls tidak berada dalam open DB transaction.
+Chunking/embedding dilakukan sebelum final activation. Update READY/FAILED wajib memakai `index_attempt_id` saat ini. PROCESSING yang lebih lama dari `POLICY_INDEX_LEASE_SECONDS` dapat di-reclaim dengan attempt token baru; attempt lama yang terlambat tidak dapat finalize. Final activation memvalidasi ulang DRAFT + READY + effective NOW sebelum men-supercede ACTIVE saat ini. Aktivasi future/expired ditolak. External Vertex call tidak berada dalam open DB transaction.
 
 ---
 
