@@ -250,7 +250,7 @@ ESCALATION_REQUIRED
 | DRAFT | SUBMIT | SUBMITTED |
 | SUBMITTED | START_ANALYSIS | AI_ANALYSIS |
 | AI_ANALYSIS | ANALYSIS_SUCCESS | CHECKING |
-| AI_ANALYSIS | ANALYSIS_FAILED_LIMIT | ESCALATION_REQUIRED |
+| AI_ANALYSIS | ANALYSIS_FAILED | ESCALATION_REQUIRED |
 | CHECKING | ALL_CHECKERS_APPROVED | SIGNING |
 | CHECKING | CHECKER_REJECTED | AI_ANALYSIS |
 | SIGNING | SIGNER_APPROVED | EXECUTION |
@@ -502,6 +502,17 @@ closed_by    → users.id      ON DELETE SET NULL
 ```
 
 `current_analysis_id` FK ditambahkan setelah tabel `ai_analyses` dibuat.
+
+Semantics:
+
+```text
+current_analysis_id
+= latest COMPLETED PASS/PASS_WITH_WARNING analysis
+  eligible for human review
+
+FAILED/GENERATING attempts never replace this pointer.
+Latest attempt is derived from highest ai_analyses.version.
+```
 
 Indexes:
 
@@ -1329,7 +1340,10 @@ FAIL
   → persist FAILED
   → preserve schema-valid analysis fields already produced
   → persist verification_status = FAIL + verification_notes
-  → no transition to CHECKING
+  → do not update current_analysis_id
+  → audit AI_ANALYSIS_FAILED / VERIFIER_FAIL
+  → ANALYSIS_FAILED
+  → ESCALATION_REQUIRED
 ```
 
 Persistence semantics:
@@ -1400,7 +1414,7 @@ Technical retry budget berasal dari application config yang dibaca dari environm
 AI_TECHNICAL_MAX_RETRIES=2
 ```
 
-Nilainya adalah jumlah retry setelah initial attempt. Tidak ada angka retry yang di-hard-code pada orchestration layer. Jika budget habis, analysis menjadi FAILED, audit `AI_ANALYSIS_FAILED` ditulis, dan case masuk `ESCALATION_REQUIRED`. Verifier `FAIL` bukan technical retry condition.
+Nilainya adalah jumlah retry setelah initial attempt. Tidak ada angka retry yang di-hard-code pada orchestration layer. Jika budget habis, analysis menjadi FAILED, audit `AI_ANALYSIS_FAILED` ditulis dengan `failure_type=TECHNICAL_RETRY_EXHAUSTED`, event `ANALYSIS_FAILED` memindahkan case ke `ESCALATION_REQUIRED`. Verifier `FAIL` bukan technical retry condition; verifier FAIL juga terminal dan masuk `ESCALATION_REQUIRED` dengan `failure_type=VERIFIER_FAIL`.
 
 ---
 
