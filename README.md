@@ -1398,13 +1398,20 @@ MVP formula:
 reanalysis_count = latest_analysis_version - 1
 ```
 
-Jika request business re-analysis berikutnya akan menghasilkan v5:
+Jika governed business action membutuhkan analysis berikutnya setelah quota habis:
 
 ```text
+Persist triggering reject/block/fail action
+↓
 Audit REANALYSIS_LIMIT_REACHED
 ↓
 case.status = ESCALATION_REQUIRED
+↓
+Do not create a new analysis version
+Do not call AI
 ```
+
+Business endpoint tetap dianggap berhasil; response mengembalikan final `case_status = ESCALATION_REQUIRED`, bukan 409.
 
 Technical Vertex/Gemini retry tidak membuat version baru dan tidak mengonsumsi quota re-analysis.
 
@@ -2038,7 +2045,6 @@ Pagination:
 | INVALID_STATE_TRANSITION | 409 |
 | STALE_ANALYSIS | 409 |
 | POLICY_CONFLICT | 409 |
-| REANALYSIS_LIMIT_REACHED | 409 |
 | AI_OUTPUT_INVALID | 502 |
 | AI_ANALYSIS_FAILED | 502 |
 | POLICY_INDEXING_FAILED | 502 |
