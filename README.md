@@ -794,23 +794,23 @@ status                VARCHAR(20)   NOT NULL
 
 summary               TEXT          NULL
 
-facts                 JSONB         NOT NULL DEFAULT '[]'
-assumptions           JSONB         NOT NULL DEFAULT '[]'
-unknowns              JSONB         NOT NULL DEFAULT '[]'
+facts                 JSONB         NULL
+assumptions           JSONB         NULL
+unknowns              JSONB         NULL
 
-risk_analysis         JSONB         NOT NULL DEFAULT '[]'
-compliance_analysis   JSONB         NOT NULL DEFAULT '{}'
+risk_analysis         JSONB         NULL
+compliance_analysis   JSONB         NULL
 
-recommendation        JSONB         NOT NULL DEFAULT '{}'
-alternatives          JSONB         NOT NULL DEFAULT '[]'
-missing_information   JSONB         NOT NULL DEFAULT '[]'
+recommendation        JSONB         NULL
+alternatives          JSONB         NULL
+missing_information   JSONB         NULL
 
-policy_status         VARCHAR(40)   NOT NULL
-evidence_quality      VARCHAR(20)   NOT NULL
-uncertainty           VARCHAR(20)   NOT NULL
+policy_status         VARCHAR(40)   NULL
+evidence_quality      VARCHAR(20)   NULL
+uncertainty           VARCHAR(20)   NULL
 
-verification_status   VARCHAR(30)   NOT NULL
-verification_notes    JSONB         NOT NULL DEFAULT '[]'
+verification_status   VARCHAR(30)   NULL
+verification_notes    JSONB         NULL
 
 model_name            VARCHAR(100)  NOT NULL
 prompt_version        VARCHAR(50)   NOT NULL
@@ -1318,17 +1318,28 @@ Behavior:
 
 ```text
 PASS
-  → persist COMPLETED
+  → persist complete schema-valid output as COMPLETED
   → transition CHECKING
 
 PASS_WITH_WARNING
-  → persist COMPLETED
+  → persist complete schema-valid output as COMPLETED
   → transition CHECKING
 
 FAIL
   → persist FAILED
+  → preserve schema-valid analysis fields already produced
+  → persist verification_status = FAIL + verification_notes
   → no transition to CHECKING
 ```
+
+Persistence semantics:
+
+```text
+NULL = field was not produced by a valid stage
+[] / {} = valid output was produced and is empty
+```
+
+If provider/model/validation fails before valid structured analysis exists, result fields remain NULL. Do not fabricate placeholder business values.
 
 ---
 
