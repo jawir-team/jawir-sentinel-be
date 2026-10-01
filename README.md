@@ -251,6 +251,7 @@ ESCALATION_REQUIRED
 | SUBMITTED | START_ANALYSIS | AI_ANALYSIS |
 | AI_ANALYSIS | ANALYSIS_SUCCESS | CHECKING |
 | AI_ANALYSIS | ANALYSIS_FAILED | ESCALATION_REQUIRED |
+| AI_ANALYSIS | REANALYSIS_LIMIT_REACHED | ESCALATION_REQUIRED |
 | CHECKING | ALL_CHECKERS_APPROVED | SIGNING |
 | CHECKING | CHECKER_REJECTED | AI_ANALYSIS |
 | SIGNING | SIGNER_APPROVED | EXECUTION |
@@ -569,6 +570,24 @@ Constraints:
 UNIQUE(case_id, user_id, role)
 ```
 
+Cardinality indexes:
+
+```sql
+CREATE UNIQUE INDEX uq_case_active_maker
+ON case_participants(case_id)
+WHERE role = 'MAKER' AND status = 'ACTIVE';
+
+CREATE UNIQUE INDEX uq_case_active_signer
+ON case_participants(case_id)
+WHERE role = 'SIGNER' AND status = 'ACTIVE';
+
+CREATE UNIQUE INDEX uq_case_active_executer
+ON case_participants(case_id)
+WHERE role = 'EXECUTER' AND status = 'ACTIVE';
+```
+
+Multiple active Checker rows are allowed.
+
 Foreign keys:
 
 ```text
@@ -584,6 +603,19 @@ INDEX(case_id)
 INDEX(user_id)
 INDEX(case_id, role)
 INDEX(case_id, role, required, status)
+INDEX(user_id, status)
+```
+
+Business rules:
+
+```text
+MAKER     exactly 1 active, creator, immutable
+CHECKER   1..N active, at least 1 required at submit
+SIGNER    exactly 1 active at submit
+EXECUTER  exactly 1 active at submit
+
+participant mutation only while case.status = DRAFT
+participant set frozen after submit
 ```
 
 ---
@@ -681,14 +713,23 @@ Indexes:
 ```text
 INDEX(policy_id)
 INDEX(status)
+INDEX(index_status)
 INDEX(policy_id, status)
-INDEX(effective_from, effective_until)
+INDEX(policy_id, status, index_status)
+INDEX(effective_from)
+INDEX(effective_until)
 ```
 
-Business rule:
+Business rules:
 
 ```text
 1 policy = maximum 1 ACTIVE version
+ACTIVE version must have index_status = READY
+
+authoritative retrieval requires:
+status = ACTIVE
+AND index_status = READY
+AND effective window valid
 ```
 
 Implementasikan melalui service transaction. Partial unique index dapat digunakan:
@@ -711,7 +752,7 @@ policy_version_id  UUID          NOT NULL FK → policy_versions.id
 section            VARCHAR(150)  NULL
 chunk_index        INTEGER       NOT NULL
 content            TEXT          NOT NULL
-embedding          VECTOR        NOT NULL
+embedding          VECTOR(768)   NOT NULL
 created_at         TIMESTAMPTZ   NOT NULL DEFAULT now()
 ```
 
@@ -731,10 +772,26 @@ Indexes:
 
 ```text
 INDEX(policy_version_id)
-VECTOR INDEX(embedding)
 ```
 
-Vector dimension harus mengikuti embedding model yang digunakan.
+Vector index:
+
+```sql
+CREATE INDEX idx_policy_chunks_embedding_hnsw
+ON policy_chunks
+USING hnsw (embedding vector_cosine_ops);
+```
+
+Embedding contract:
+
+```text
+model                  = gemini-embedding-001
+output dimensionality  = 768
+document task          = RETRIEVAL_DOCUMENT
+query task             = RETRIEVAL_QUERY
+distance               = cosine
+index                  = HNSW
+```
 
 ---
 
@@ -1077,38 +1134,87 @@ INDEX(case_id, created_at DESC)
 
 ## 7.17 `audit_events`
 
+Single append-only audit table with explicit scope.
+
 ```text
 audit_events
 ------------
-id                UUID          PK
-case_id           UUID          NOT NULL FK → cases.id
-event_type        VARCHAR(60)   NOT NULL
-actor_id          UUID          NULL FK → users.id
-actor_role        VARCHAR(20)   NULL
-analysis_id       UUID          NULL FK → ai_analyses.id
-metadata          JSONB         NOT NULL DEFAULT '{}'
-created_at        TIMESTAMPTZ   NOT NULL DEFAULT now()
+id                 UUID          PK
+scope_type         VARCHAR(20)   NOT NULL
+
+case_id            UUID          NULL FK → cases.id
+policy_id          UUID          NULL FK → policies.id
+policy_version_id  UUID          NULL FK → policy_versions.id
+
+event_type         VARCHAR(60)   NOT NULL
+actor_id           UUID          NULL FK → users.id
+actor_role         VARCHAR(20)   NULL
+analysis_id        UUID          NULL FK → ai_analyses.id
+
+metadata           JSONB         NOT NULL DEFAULT '{}'
+created_at         TIMESTAMPTZ   NOT NULL DEFAULT now()
+```
+
+Allowed scope:
+
+```text
+CASE
+POLICY
+```
+
+Scope rules:
+
+```text
+CASE:
+- case_id required
+- policy_id/policy_version_id null
+- analysis_id optional
+- actor_role workflow role or null for SYSTEM
+
+POLICY:
+- case_id null
+- policy_id required
+- policy_version_id optional
+- analysis_id null
+- actor_role null
 ```
 
 Foreign keys:
 
 ```text
-case_id     → cases.id       ON DELETE CASCADE
-actor_id    → users.id       ON DELETE SET NULL
-analysis_id → ai_analyses.id ON DELETE SET NULL
+case_id           → cases.id           ON DELETE CASCADE
+policy_id         → policies.id        ON DELETE RESTRICT
+policy_version_id → policy_versions.id ON DELETE RESTRICT
+actor_id          → users.id           ON DELETE SET NULL
+analysis_id       → ai_analyses.id     ON DELETE SET NULL
 ```
 
 Indexes:
 
 ```text
-INDEX(case_id)
+INDEX(scope_type)
 INDEX(event_type)
-INDEX(case_id, created_at ASC)
 INDEX(actor_id)
+INDEX(case_id)
+INDEX(case_id, created_at ASC)
+INDEX(policy_id)
+INDEX(policy_id, created_at ASC)
+INDEX(policy_version_id)
 ```
 
-Audit event bersifat append-only pada application layer.
+Escalation metadata:
 
+```text
+AI_ANALYSIS_FAILED.failure_type =
+  VERIFIER_FAIL
+  | TECHNICAL_RETRY_EXHAUSTED
+
+REANALYSIS_LIMIT_REACHED:
+  latest_analysis_version
+  max_reanalysis
+```
+
+Audit is append-only. Policy events never use a fake case_id.
 ---
 
 # 8. Database Mutation Rules
@@ -1140,18 +1246,32 @@ Contoh Checker reject:
 ```text
 BEGIN
 
-1. Validate current case state
-2. Validate actor assignment
-3. Validate current analysis ID
-4. Insert decision(REJECT)
-5. Insert review feedback evidence
-6. Insert audit event
-7. Transition case → AI_ANALYSIS
+1. Lock case
+2. Validate current state / actor / current analysis
+3. Insert decision(REJECT)
+4. Insert REVIEW_FEEDBACK evidence
+5. Audit CHECKER_REJECTED
+6. Apply CHECKER_REJECTED → AI_ANALYSIS
+7. Check MAX_REANALYSIS
+
+if quota available:
+  final state = AI_ANALYSIS
+
+if quota exhausted:
+  Audit REANALYSIS_LIMIT_REACHED
+  Apply → ESCALATION_REQUIRED
 
 COMMIT
-
-8. Trigger re-analysis
 ```
+
+After commit:
+
+```text
+AI_ANALYSIS         → trigger re-analysis
+ESCALATION_REQUIRED → do not call AI
+```
+
+Same pattern applies to Signer Reject and Execution BLOCKED/FAILED.
 
 Gemini tidak dipanggil saat DB transaction masih terbuka.
 
@@ -1191,41 +1311,37 @@ Approval analysis lama otomatis obsolete karena tetap terikat ke old `analysis_i
 
 # 10. Policy Retrieval
 
-Hanya policy yang memenuhi seluruh kondisi berikut yang boleh masuk authoritative retrieval:
+Authoritative candidates:
 
 ```text
 policy_versions.status = ACTIVE
-effective_from <= now() OR effective_from IS NULL
-effective_until > now() OR effective_until IS NULL
+AND policy_versions.index_status = READY
+AND (effective_from <= now() OR effective_from IS NULL)
+AND (effective_until > now() OR effective_until IS NULL)
+AND (policies.case_type_id = requested_case_type_id OR policies.case_type_id IS NULL)
 ```
+
+`policies.domain` is metadata only and is not a hard filter in MVP.
 
 Retrieval pipeline:
 
 ```text
-Case Context
+case_type_id + retrieval_text
   ↓
-Case Type / Domain Metadata Filter
+ACTIVE + READY + Effective filter
   ↓
-ACTIVE + Effective Policy Filter
+matching case_type OR generic policy
   ↓
-Embedding Query
+RETRIEVAL_QUERY embedding / 768
   ↓
-pgvector Similarity Search
+HNSW cosine search
   ↓
-Top Relevant Policy Chunks
+TOP_K = 8
+  ↓
+chunks + provenance + distance/relevance
 ```
 
-Retrieved chunk harus menyimpan:
-
-```text
-policy_id
-policy_version_id
-policy_code
-version
-section
-content
-relevance_score
-```
+No similarity threshold and no second reranker in MVP.
 
 ---
 
@@ -1364,7 +1480,7 @@ Re-analysis context terdiri dari:
 ```text
 Current Case Snapshot
 Current Evidence
-Current ACTIVE Policy Chunks
+Current ACTIVE + READY Policy Chunks
 Latest Reviewer Feedback
 Latest Execution Feedback
 Previous Analysis Summary
@@ -1488,8 +1604,10 @@ Insert REJECT decision
 Insert REVIEW_FEEDBACK evidence
 Audit CHECKER_REJECTED
 Transition → AI_ANALYSIS
-↓ COMMIT
-Trigger re-analysis
+Check MAX_REANALYSIS
+↓
+quota available  → COMMIT AI_ANALYSIS → trigger re-analysis
+quota exhausted  → audit limit → ESCALATION_REQUIRED → COMMIT → no AI call
 ```
 
 ---
@@ -1521,8 +1639,10 @@ Insert REJECT decision
 Insert REVIEW_FEEDBACK evidence
 Audit SIGNER_REJECTED
 Transition → AI_ANALYSIS
-↓ COMMIT
-Trigger re-analysis
+Check MAX_REANALYSIS
+↓
+quota available  → COMMIT AI_ANALYSIS → trigger re-analysis
+quota exhausted  → audit limit → ESCALATION_REQUIRED → COMMIT → no AI call
 ```
 
 ---
@@ -1552,8 +1672,10 @@ Update execution → BLOCKED / FAILED
 Insert EXECUTION_RESULT evidence
 Audit EXECUTION_BLOCKED / EXECUTION_FAILED
 Transition → AI_ANALYSIS
-↓ COMMIT
-Trigger re-analysis
+Check MAX_REANALYSIS
+↓
+quota available  → COMMIT AI_ANALYSIS → trigger re-analysis
+quota exhausted  → audit limit → ESCALATION_REQUIRED → COMMIT → no AI call
 ```
 
 ---
