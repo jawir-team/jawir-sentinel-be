@@ -29,7 +29,7 @@ Backend bertanggung jawab atas:
 
 > **AI generates intelligence. Backend enforces control. Humans hold authority. Data preserves accountability.**
 
-Backend adalah source of truth untuk:
+Backend adalah sumber kebenaran untuk:
 
 - workflow state;
 - access control;
@@ -269,7 +269,7 @@ ESCALATION_REQUIRED
 
 ## 5.1 Tabel Transisi
 
-| Current State | Event | Next State |
+| State Saat Ini | Event | Next State |
 |---|---|---|
 | DRAFT | SUBMIT | SUBMITTED |
 | SUBMITTED | START_ANALYSIS | AI_ANALYSIS |
@@ -1578,7 +1578,7 @@ Previous Analysis Summary
 Current Workflow State
 ```
 
-Previous analysis tidak dianggap source of truth.
+Previous analysis tidak dianggap sumber kebenaran.
 
 ---
 
