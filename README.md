@@ -1346,17 +1346,30 @@ Config:
 MAX_REANALYSIS=3
 ```
 
-Jika limit tercapai:
+Semantics:
 
 ```text
+v1 = initial analysis, reanalysis_count 0
+v2 = re-analysis #1
+v3 = re-analysis #2
+v4 = re-analysis #3
+```
+
+MVP formula:
+
+```text
+reanalysis_count = latest_analysis_version - 1
+```
+
+Jika request business re-analysis berikutnya akan menghasilkan v5:
+
+```text
+Audit REANALYSIS_LIMIT_REACHED
+↓
 case.status = ESCALATION_REQUIRED
 ```
 
-Audit event:
-
-```text
-REANALYSIS_LIMIT_REACHED
-```
+Technical Vertex/Gemini retry tidak membuat version baru dan tidak mengonsumsi quota re-analysis.
 
 ---
 
