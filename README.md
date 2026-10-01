@@ -25,7 +25,7 @@ Backend bertanggung jawab atas:
 
 ---
 
-## 1. Core Principle
+## 1. Prinsip Utama
 
 > **AI generates intelligence. Backend enforces control. Humans hold authority. Data preserves accountability.**
 
@@ -64,7 +64,7 @@ AI dan frontend tidak dapat mengubah workflow state secara langsung.
 
 ---
 
-## 3. Repository Structure
+## 3. Struktur Repository
 
 ```text
 jawir-sentinel-be/
@@ -121,7 +121,7 @@ jawir-sentinel-be/
 
 ---
 
-## 4. Package Responsibility
+## 4. Tanggung Jawab Package
 
 ### `internal/unit`
 
@@ -267,7 +267,7 @@ CLOSED
 ESCALATION_REQUIRED
 ```
 
-## 5.1 Transition Table
+## 5.1 Tabel Transisi
 
 | Current State | Event | Next State |
 |---|---|---|
@@ -288,7 +288,7 @@ Tidak tersedia endpoint generic `change-status`.
 
 ---
 
-# 6. Workflow Roles
+# 6. Role Workflow
 
 Role ditentukan per case:
 
@@ -318,9 +318,9 @@ Semua required Checker harus `APPROVE` sebelum workflow masuk ke `SIGNING`.
 
 ---
 
-# 7. Database Design
+# 7. Desain Database
 
-## 7.1 ERD Overview
+## 7.1 Gambaran ERD
 
 ```text
 ┌─────────────┐
@@ -372,7 +372,7 @@ cases ────────────────────────�
 
 ---
 
-## 7.2 PostgreSQL Extensions
+## 7.2 Extension PostgreSQL
 
 Migration awal harus mengaktifkan:
 
@@ -646,7 +646,7 @@ INDEX(case_id, role, required, status)
 INDEX(user_id, status)
 ```
 
-Business rules:
+Aturan bisnis:
 
 ```text
 MAKER     exactly 1 active, creator, immutable
@@ -763,7 +763,7 @@ INDEX(effective_from)
 INDEX(effective_until)
 ```
 
-Business rules:
+Aturan bisnis:
 
 ```text
 1 policy = maximum 1 ACTIVE version
@@ -1306,9 +1306,9 @@ REANALYSIS_LIMIT_REACHED:
 Audit is append-only. Policy events never use a fake case_id.
 ---
 
-# 8. Database Mutation Rules
+# 8. Aturan Mutation Database
 
-## 8.1 No Hard Delete for Workflow Data
+## 8.1 Tidak Ada Hard Delete untuk Data Workflow
 
 Tidak ada hard delete melalui application API untuk:
 
@@ -1326,7 +1326,7 @@ State/history dipertahankan untuk auditability.
 
 ---
 
-## 8.2 Critical Transaction Boundary
+## 8.2 Batas Critical Transaction
 
 AI job enqueue intent is part of the same DB transaction as workflow mutation.
 
@@ -1368,7 +1368,7 @@ No Vertex or RabbitMQ network call runs inside the business transaction.
 
 ---
 
-# 9. Concurrency Rules
+# 9. Aturan Concurrency
 
 Semua decision request membawa `analysis_id`.
 
@@ -1436,11 +1436,11 @@ No similarity threshold and no second reranker in MVP.
 
 ---
 
-# 11. AI Analysis Contract
+# 11. Kontrak Analisis AI
 
 Gemini analysis wajib menghasilkan structured JSON.
 
-## 11.1 Analysis Output
+## 11.1 Output Analysis
 
 ```json
 {
@@ -1516,7 +1516,7 @@ Backend wajib validate JSON sebelum persist sebagai completed analysis.
 
 ---
 
-## 11.2 Verifier Output
+## 11.2 Output Verifier
 
 ```json
 {
@@ -1564,7 +1564,7 @@ If provider/model/validation fails before valid structured analysis exists, resu
 
 ---
 
-# 12. AI Re-analysis Context
+# 12. Konteks Re-analysis AI
 
 Re-analysis context terdiri dari:
 
@@ -1582,7 +1582,7 @@ Previous analysis tidak dianggap source of truth.
 
 ---
 
-# 13. Re-analysis Limit
+# 13. Batas Re-analysis
 
 Config:
 
@@ -1632,7 +1632,7 @@ Nilainya adalah jumlah retry setelah initial attempt. Tidak ada angka retry yang
 
 ---
 
-# 14. Workflow Side Effects
+# 14. Side Effect Workflow
 
 ## 14.1 Submit Case
 
@@ -1654,7 +1654,7 @@ worker dispatches/consumes asynchronously through RabbitMQ
 
 ---
 
-## 14.2 Analysis Success
+## 14.2 Analysis Berhasil
 
 ```text
 Persist ai_analyses
@@ -1739,7 +1739,7 @@ quota exhausted  → audit limit → ESCALATION_REQUIRED → COMMIT → no AI ca
 
 ---
 
-## 14.7 Execution Success
+## 14.7 Execution Berhasil
 
 ```text
 Validate EXECUTION
@@ -1820,7 +1820,7 @@ Frontend tidak menjadi security boundary.
 
 ---
 
-# 17. API Contract
+# 17. Kontrak API
 
 Base path:
 
@@ -2220,7 +2220,7 @@ Chunking/embedding dilakukan sebelum final activation. READY/FAILED updates requ
 
 ---
 
-# 18. Standard API Response
+# 18. Response API Standar
 
 Success:
 
@@ -2257,7 +2257,7 @@ Pagination:
 
 ---
 
-# 19. Error Mapping
+# 19. Mapping Error
 
 | Error Code | HTTP Status |
 |---|---:|
@@ -2276,7 +2276,7 @@ Pagination:
 
 ---
 
-# 20. Audit Event Catalog
+# 20. Katalog Event Audit
 
 ```text
 CASE_CREATED
@@ -2344,7 +2344,7 @@ Stored `mime_type` is used by the AI context builder. Supported files are passed
 
 ---
 
-# 22. Environment Variables
+# 22. Environment Variable
 
 ```env
 APP_ENV=development
@@ -2409,7 +2409,7 @@ COMPLIANCE_EXCEPTION
 OPERATIONAL_INCIDENT
 ```
 
-## Synthetic Policies
+## Policy Synthetic
 
 Minimal:
 
@@ -2419,7 +2419,7 @@ SOP-RISK-001 Operational Risk Escalation
 SOP-COMP-001 Evidence and Approval Requirement
 ```
 
-## Demo Case
+## Case Demo
 
 ```text
 Case Type:
@@ -2437,7 +2437,7 @@ Facts:
 
 ---
 
-# 24. Test Matrix
+# 24. Matriks Pengujian
 
 ## 24.1 Workflow
 
@@ -2529,7 +2529,7 @@ Sensitive evidence content tidak ditulis ke application logs.
 
 ---
 
-# 26. Local Development
+# 26. Development Lokal
 
 Requirements:
 
@@ -2593,7 +2593,7 @@ http://localhost:8080
 
 ---
 
-# 27. Make Commands
+# 27. Command Make
 
 ```bash
 make run
@@ -2612,7 +2612,7 @@ make docker-build
 
 ---
 
-# 28. Database Migration
+# 28. Migration Database
 
 Migration:
 
@@ -2643,7 +2643,7 @@ Schema change selalu melalui migration.
 
 ---
 
-# 29. SQL Query Layout
+# 29. Layout Query SQL
 
 ```text
 db/queries/
@@ -2696,7 +2696,7 @@ Local Docker Compose includes PostgreSQL + pgvector + RabbitMQ.
 
 ---
 
-# 31. Backend Definition of Done
+# 31. Definition of Done Backend
 
 Backend MVP dianggap selesai ketika flow berikut berjalan end-to-end melalui API:
 
@@ -2745,7 +2745,7 @@ Seluruh workflow harus:
 
 ---
 
-# 32. Documentation Contract
+# 32. Kontrak Dokumentasi
 
 Product specification, ERD, state machine, dan API contract utama berada pada repository:
 
