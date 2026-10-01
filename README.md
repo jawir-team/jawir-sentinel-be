@@ -617,6 +617,9 @@ id               UUID          PK
 policy_id        UUID          NOT NULL FK → policies.id
 version          VARCHAR(30)   NOT NULL
 status           VARCHAR(20)   NOT NULL DEFAULT 'DRAFT'
+index_status     VARCHAR(20)   NOT NULL DEFAULT 'NOT_STARTED'
+index_error      TEXT          NULL
+indexed_at       TIMESTAMPTZ   NULL
 
 content          TEXT          NOT NULL
 file_path        TEXT          NULL
@@ -637,6 +640,15 @@ Allowed status:
 DRAFT
 ACTIVE
 SUPERSEDED
+```
+
+Allowed index status:
+
+```text
+NOT_STARTED
+PROCESSING
+READY
+FAILED
 ```
 
 Constraints:
@@ -1925,14 +1937,19 @@ DRAFT
 Behavior:
 
 ```text
-current ACTIVE version → SUPERSEDED
-target DRAFT version → ACTIVE
+target DRAFT → index_status PROCESSING
+↓
 policy chunks generated
 embeddings generated
+↓
+target index_status → READY
+↓
+current ACTIVE version → SUPERSEDED
+target DRAFT version → ACTIVE
 audit events written
 ```
 
-Seluruh activation metadata update dilakukan dalam transaction. Chunking/embedding dilakukan setelah policy version berhasil diaktifkan; retrieval hanya menggunakan active version yang sudah memiliki index siap pakai.
+Chunking/embedding dilakukan sebelum final activation. External Vertex calls tidak berada dalam open DB transaction. Jika indexing gagal, target tetap DRAFT dengan index_status FAILED dan current ACTIVE version tetap unchanged. Retrieval hanya menggunakan ACTIVE + READY policy versions.
 
 ---
 
@@ -1991,6 +2008,7 @@ Pagination:
 | REANALYSIS_LIMIT_REACHED | 409 |
 | AI_OUTPUT_INVALID | 502 |
 | AI_ANALYSIS_FAILED | 502 |
+| POLICY_INDEXING_FAILED | 502 |
 | INTERNAL_ERROR | 500 |
 
 ---
