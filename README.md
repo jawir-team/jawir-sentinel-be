@@ -13,7 +13,8 @@ Backend bertanggung jawab atas:
 - case lifecycle;
 - SOP/policy management;
 - evidence management;
-- AI orchestration;
+- durable AI job orchestration;
+- transactional outbox + RabbitMQ delivery;
 - policy retrieval;
 - analysis versioning;
 - Checker/Signer decision flow;
@@ -56,7 +57,9 @@ AI dan frontend tidak dapat mengubah workflow state secara langsung.
 | AI | Gemini via Vertex AI |
 | File Storage | Google Cloud Storage |
 | Authentication | Firebase Authentication |
-| Runtime | Google Cloud Run |
+| Messaging | RabbitMQ quorum queue |
+| Runtime API | Google Cloud Run Service |
+| Runtime Worker | Google Cloud Run Worker Pool |
 | CI/CD | GitHub Actions + Docker |
 
 ---
@@ -66,7 +69,9 @@ AI dan frontend tidak dapat mengubah workflow state secara langsung.
 ```text
 jawir-sentinel-be/
 ├── cmd/
-│   └── api/
+│   ├── api/
+│   │   └── main.go
+│   └── worker/
 │       └── main.go
 │
 ├── internal/
@@ -82,6 +87,8 @@ jawir-sentinel-be/
 │   ├── execution/
 │   ├── audit/
 │   ├── auth/
+│   ├── outbox/
+│   ├── messaging/
 │   └── ai/
 │
 ├── db/
@@ -213,11 +220,28 @@ internal/workflow/
 
 - Firebase ID Token verification
 - authenticated user context
-- authorization middleware
+- system-role authorization
+- case-role authorization middleware
+
+### `internal/outbox`
+
+- durable AI job intent
+- outbox repository
+- pending event dispatch
+- publisher-confirm handling
+
+### `internal/messaging`
+
+- RabbitMQ connection/topology
+- durable quorum queue declaration
+- persistent publishing
+- manual consumer acknowledgements
+- message identity / redelivery handling
 
 ### `internal/ai`
 
 - Vertex AI client
+- RabbitMQ AI job consumer
 - context builder
 - policy retrieval orchestration
 - Gemini analysis
@@ -280,11 +304,15 @@ Segregation of duties:
 ```text
 Maker ≠ Checker
 Maker ≠ Signer
+Maker ≠ Executer
 Checker ≠ Signer
 Checker ≠ Executer
 Signer ≠ Executer
-Maker = Executer allowed
 ```
+
+Setiap active user hanya boleh memiliki satu workflow role pada case yang sama.
+
+System role `USER|ADMIN` terpisah dari workflow role. ADMIN tidak bypass SoD atau workflow authority.
 
 Semua required Checker harus `APPROVE` sebelum workflow masuk ke `SIGNING`.
 
@@ -390,7 +418,7 @@ firebase_uid   VARCHAR(128)  NOT NULL UNIQUE
 name           VARCHAR(150)  NOT NULL
 email          VARCHAR(255)  NOT NULL UNIQUE
 status         VARCHAR(20)   NOT NULL DEFAULT 'ACTIVE'
-is_admin       BOOLEAN       NOT NULL DEFAULT FALSE
+system_role    VARCHAR(20)   NOT NULL DEFAULT 'USER'
 created_at     TIMESTAMPTZ   NOT NULL DEFAULT now()
 updated_at     TIMESTAMPTZ   NOT NULL DEFAULT now()
 ```
@@ -458,7 +486,7 @@ urgency               VARCHAR(20)   NOT NULL
 status                VARCHAR(40)   NOT NULL DEFAULT 'DRAFT'
 
 created_by            UUID          NOT NULL FK → users.id
-owner_id              UUID          NULL FK → users.id
+owner_id              UUID          NOT NULL FK → users.id
 
 current_analysis_id   UUID          NULL FK → ai_analyses.id
 
@@ -501,6 +529,14 @@ created_by   → users.id      ON DELETE RESTRICT
 owner_id     → users.id      ON DELETE SET NULL
 closed_by    → users.id      ON DELETE SET NULL
 ```
+
+Owner contract:
+
+```text
+created_by = owner_id = immutable Maker
+```
+
+No owner reassignment exists in MVP.
 
 `current_analysis_id` FK ditambahkan setelah tabel `ai_analyses` dibuat.
 
@@ -584,9 +620,13 @@ WHERE role = 'SIGNER' AND status = 'ACTIVE';
 CREATE UNIQUE INDEX uq_case_active_executer
 ON case_participants(case_id)
 WHERE role = 'EXECUTER' AND status = 'ACTIVE';
+
+CREATE UNIQUE INDEX uq_case_one_active_role_per_user
+ON case_participants(case_id, user_id)
+WHERE status = 'ACTIVE';
 ```
 
-Multiple active Checker rows are allowed.
+Multiple active Checker rows are allowed, but one user cannot hold two active roles on the same case.
 
 Foreign keys:
 
@@ -663,6 +703,8 @@ version          VARCHAR(30)   NOT NULL
 status           VARCHAR(20)   NOT NULL DEFAULT 'DRAFT'
 index_status     VARCHAR(20)   NOT NULL DEFAULT 'NOT_STARTED'
 index_error      TEXT          NULL
+index_attempt_id UUID          NULL
+index_started_at TIMESTAMPTZ   NULL
 indexed_at       TIMESTAMPTZ   NULL
 
 content          TEXT          NOT NULL
@@ -726,6 +768,8 @@ Business rules:
 ```text
 1 policy = maximum 1 ACTIVE version
 ACTIVE version must have index_status = READY
+activation target must be effective NOW
+PROCESSING attempt is protected by index_attempt_id + index_started_at lease
 
 authoritative retrieval requires:
 status = ACTIVE
@@ -809,6 +853,7 @@ evidence_type   VARCHAR(30)   NOT NULL
 title           VARCHAR(255)  NULL
 content         TEXT          NULL
 file_path       TEXT          NULL
+mime_type       VARCHAR(100)  NULL
 created_at      TIMESTAMPTZ   NOT NULL DEFAULT now()
 ```
 
@@ -1141,7 +1186,39 @@ INDEX(case_id, created_at DESC)
 
 ---
 
-## 7.17 `audit_events`
+## 7.17 `outbox_events`
+
+```text
+outbox_events
+-------------
+id            UUID          PK
+case_id       UUID          NOT NULL FK → cases.id
+analysis_id   UUID          NOT NULL FK → ai_analyses.id
+event_type    VARCHAR(60)   NOT NULL
+payload       JSONB         NOT NULL DEFAULT '{}'
+status        VARCHAR(20)   NOT NULL DEFAULT 'PENDING'
+attempt_count INTEGER       NOT NULL DEFAULT 0
+published_at  TIMESTAMPTZ   NULL
+last_error    TEXT          NULL
+created_at    TIMESTAMPTZ   NOT NULL DEFAULT now()
+updated_at    TIMESTAMPTZ   NOT NULL DEFAULT now()
+```
+
+Contract:
+
+```text
+event_type = AI_ANALYSIS_REQUESTED
+status     = PENDING | PUBLISHED
+UNIQUE(event_type, analysis_id)
+```
+
+Outbox row is created atomically with the GENERATING analysis. Dispatcher publishes persistent messages with `message_id=outbox.id`, waits for publisher confirm, then marks PUBLISHED.
+
+Duplicate publish/redelivery is allowed; worker finalization is state-idempotent.
+
+---
+
+## 7.18 `audit_events`
 
 Single append-only audit table with explicit scope.
 
@@ -1248,41 +1325,43 @@ State/history dipertahankan untuk auditability.
 
 ## 8.2 Critical Transaction Boundary
 
-Workflow mutation harus atomic.
+AI job enqueue intent is part of the same DB transaction as workflow mutation.
 
-Contoh Checker reject:
+Initial submit:
 
 ```text
 BEGIN
+validate + freeze case
+DRAFT → SUBMITTED → AI_ANALYSIS
+create analysis v1 GENERATING
+audit CASE_SUBMITTED
+audit AI_ANALYSIS_STARTED
+insert outbox AI_ANALYSIS_REQUESTED
+COMMIT
+```
 
-1. Lock case
-2. Validate current state / actor / current analysis
-3. Insert decision(REJECT)
-4. Insert REVIEW_FEEDBACK evidence
-5. Audit CHECKER_REJECTED
-6. Apply CHECKER_REJECTED → AI_ANALYSIS
-7. Check MAX_REANALYSIS
+Governed reject/block/fail:
 
-if quota available:
-  final state = AI_ANALYSIS
+```text
+BEGIN
+persist business action
+transition → AI_ANALYSIS
+check MAX_REANALYSIS
 
-if quota exhausted:
-  Audit REANALYSIS_LIMIT_REACHED
-  Apply → ESCALATION_REQUIRED
+quota available:
+  create next GENERATING analysis
+  audit AI_ANALYSIS_STARTED
+  insert outbox AI_ANALYSIS_REQUESTED
+
+quota exhausted:
+  audit REANALYSIS_LIMIT_REACHED
+  → ESCALATION_REQUIRED
+  no analysis/outbox row
 
 COMMIT
 ```
 
-After commit:
-
-```text
-AI_ANALYSIS         → trigger re-analysis
-ESCALATION_REQUIRED → do not call AI
-```
-
-Same pattern applies to Signer Reject and Execution BLOCKED/FAILED.
-
-Gemini tidak dipanggil saat DB transaction masih terbuka.
+No Vertex or RabbitMQ network call runs inside the business transaction.
 
 ---
 
@@ -1555,18 +1634,19 @@ Nilainya adalah jumlah retry setelah initial attempt. Tidak ada angka retry yang
 ## 14.1 Submit Case
 
 ```text
-Validate Maker
-Validate DRAFT
-Validate required participants
-Validate segregation of duties
+Validate + freeze governance context
 ↓
-Update case → SUBMITTED
+BEGIN
+DRAFT → SUBMITTED → AI_ANALYSIS
+Create v1 GENERATING
 Audit CASE_SUBMITTED
-↓ COMMIT
-Apply START_ANALYSIS
+Audit AI_ANALYSIS_STARTED
+Insert PENDING outbox AI_ANALYSIS_REQUESTED
+COMMIT
 ↓
-AI_ANALYSIS
-Trigger analysis
+API returns AI_ANALYSIS
+↓
+worker dispatches/consumes asynchronously through RabbitMQ
 ```
 
 ---
@@ -1711,16 +1791,26 @@ Backend:
 
 # 16. Authorization
 
-Authorization server-side berdasarkan:
+Two independent role dimensions:
 
 ```text
-authenticated user
-case participant assignment
-case role
-current state
-current analysis version
-segregation-of-duties rules
-admin flag
+System role:
+USER | ADMIN
+
+Case workflow role:
+MAKER | CHECKER | SIGNER | EXECUTER
+```
+
+Authorization:
+
+```text
+safe master-data/user directory reads → any ACTIVE authenticated user
+master-data/user writes              → ADMIN
+policy create/version/activate        → ADMIN
+
+case read                            → participant OR ADMIN
+case workflow mutation               → exact assigned case role
+ADMIN alone                           → no workflow-action authority
 ```
 
 Frontend tidak menjadi security boundary.
@@ -1752,7 +1842,7 @@ Response:
       "code": "OPS",
       "name": "Operations"
     },
-    "is_admin": false
+    "system_role": "USER"
   }
 }
 ```
@@ -2108,6 +2198,9 @@ DRAFT
 Behavior:
 
 ```text
+validate target effective NOW
+↓
+claim index_attempt_id + index_started_at
 target DRAFT → index_status PROCESSING
 ↓
 policy chunks generated
@@ -2120,7 +2213,7 @@ target DRAFT version → ACTIVE
 audit events written
 ```
 
-Chunking/embedding dilakukan sebelum final activation. External Vertex calls tidak berada dalam open DB transaction. Jika indexing gagal, target tetap DRAFT dengan index_status FAILED dan current ACTIVE version tetap unchanged. Retrieval hanya menggunakan ACTIVE + READY policy versions.
+Chunking/embedding dilakukan sebelum final activation. READY/FAILED updates require the current index_attempt_id. PROCESSING older than POLICY_INDEX_LEASE_SECONDS may be reclaimed with a new attempt token; late old attempts cannot finalize. Final activation revalidates DRAFT + READY + effective NOW before superseding current ACTIVE. Future/expired activation is rejected. External Vertex calls tidak berada dalam open DB transaction.
 
 ---
 
@@ -2223,25 +2316,31 @@ POLICY_SUPERSEDED
 
 # 21. File Upload
 
-Binary disimpan langsung ke Google Cloud Storage menggunakan signed URL.
-
-Flow:
-
 ```text
-Client
-  ↓
-POST upload-url
-  ↓
-Backend returns signed URL + file key
-  ↓
-Client uploads to Cloud Storage
-  ↓
-POST evidence/file
-  ↓
-Backend registers evidence metadata
+Client requests signed upload URL
+↓
+Backend validates actor/state/MIME
+↓
+Client uploads directly to GCS
+↓
+Client registers file key
+↓
+Backend revalidates actor/state
+↓
+Verify case-scoped key + object exists + MIME
+↓
+Persist evidence
 ```
 
-Backend tidak menerima large binary melalui API utama.
+Supported MVP MIME:
+
+```text
+application/pdf
+image/jpeg
+image/png
+```
+
+Stored `mime_type` is used by the AI context builder. Supported files are passed directly to Gemini using a GCS `gs://` URI; no custom OCR pipeline is required.
 
 ---
 
@@ -2266,6 +2365,10 @@ VERTEX_EMBEDDING_MODEL=...
 MAX_REANALYSIS=3
 AI_TECHNICAL_MAX_RETRIES=2
 POLICY_RETRIEVAL_TOP_K=8
+POLICY_INDEX_LEASE_SECONDS=900
+
+RABBITMQ_URL=amqps://...
+RABBITMQ_AI_QUEUE=sentinel.ai.analysis
 ```
 
 Credential Google Cloud menggunakan Application Default Credentials / service account.
@@ -2562,44 +2665,33 @@ Generated sqlc code tidak diedit manual.
 
 # 30. Deployment
 
-Pipeline:
+One container image supports:
 
 ```text
-GitHub
-  ↓
-GitHub Actions
-  ↓
-Test
-  ↓
-Docker Build
-  ↓
-Push Image
-  ↓
-Cloud Run Deploy
+cmd/api    → sentinel-api   → Cloud Run Service
+cmd/worker → sentinel-worker → Cloud Run Worker Pool
 ```
 
-Service:
+Production dependencies:
 
 ```text
-sentinel-api
-```
-
-Infrastructure:
-
-```text
-Cloud Run
-Cloud SQL PostgreSQL
+Cloud SQL PostgreSQL + pgvector
 Cloud Storage
 Vertex AI
-Firebase Authentication
+Firebase Auth
+RabbitMQ durable/fault-tolerant broker
 ```
 
-Environment:
+RabbitMQ queue contract:
 
 ```text
-DEV
-PROD
+durable quorum queue
+persistent messages
+publisher confirms
+manual consumer acknowledgements
 ```
+
+Local Docker Compose includes PostgreSQL + pgvector + RabbitMQ.
 
 ---
 
