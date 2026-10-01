@@ -1698,8 +1698,18 @@ Audit CHECKER_REJECTED
 Transition → AI_ANALYSIS
 Check MAX_REANALYSIS
 ↓
-quota available  → COMMIT AI_ANALYSIS → trigger re-analysis
-quota exhausted  → audit limit → ESCALATION_REQUIRED → COMMIT → no AI call
+quota tersedia
+→ Allocate next GENERATING analysis
+→ Audit AI_ANALYSIS_STARTED
+→ Insert PENDING outbox AI_ANALYSIS_REQUESTED
+→ COMMIT
+→ sentinel-worker mengirim job melalui RabbitMQ
+
+quota habis
+→ Audit REANALYSIS_LIMIT_REACHED
+→ ESCALATION_REQUIRED
+→ COMMIT
+→ tidak membuat analysis/outbox baru
 ```
 
 ---
@@ -1733,8 +1743,18 @@ Audit SIGNER_REJECTED
 Transition → AI_ANALYSIS
 Check MAX_REANALYSIS
 ↓
-quota available  → COMMIT AI_ANALYSIS → trigger re-analysis
-quota exhausted  → audit limit → ESCALATION_REQUIRED → COMMIT → no AI call
+quota tersedia
+→ Allocate next GENERATING analysis
+→ Audit AI_ANALYSIS_STARTED
+→ Insert PENDING outbox AI_ANALYSIS_REQUESTED
+→ COMMIT
+→ sentinel-worker mengirim job melalui RabbitMQ
+
+quota habis
+→ Audit REANALYSIS_LIMIT_REACHED
+→ ESCALATION_REQUIRED
+→ COMMIT
+→ tidak membuat analysis/outbox baru
 ```
 
 ---
@@ -1766,8 +1786,18 @@ Audit EXECUTION_BLOCKED / EXECUTION_FAILED
 Transition → AI_ANALYSIS
 Check MAX_REANALYSIS
 ↓
-quota available  → COMMIT AI_ANALYSIS → trigger re-analysis
-quota exhausted  → audit limit → ESCALATION_REQUIRED → COMMIT → no AI call
+quota tersedia
+→ Allocate next GENERATING analysis
+→ Audit AI_ANALYSIS_STARTED
+→ Insert PENDING outbox AI_ANALYSIS_REQUESTED
+→ COMMIT
+→ sentinel-worker mengirim job melalui RabbitMQ
+
+quota habis
+→ Audit REANALYSIS_LIMIT_REACHED
+→ ESCALATION_REQUIRED
+→ COMMIT
+→ tidak membuat analysis/outbox baru
 ```
 
 ---
