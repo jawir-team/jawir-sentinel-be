@@ -20,7 +20,7 @@ Backend bertanggung jawab atas:
 - Checker/Signer decision flow;
 - execution flow;
 - audit trail;
-- authentication and authorization enforcement;
+- enforcement authentication dan authorization;
 - backend deployment.
 
 ---
@@ -200,7 +200,7 @@ internal/workflow/
 - Checker decision
 - Signer decision
 - approval validation
-- stale analysis validation
+- validasi stale analysis
 
 ### `internal/execution`
 
@@ -626,7 +626,7 @@ ON case_participants(case_id, user_id)
 WHERE status = 'ACTIVE';
 ```
 
-Multiple active Checker rows are allowed, but one user cannot hold two active roles on the same case.
+Multiple active Checker diperbolehkan, tetapi satu user tidak boleh memiliki dua active role pada case yang sama.
 
 Foreign keys:
 
@@ -1176,7 +1176,7 @@ Constraint:
 UNIQUE(case_id, analysis_id)
 ```
 
-One signed analysis can create at most one execution attempt.
+Satu signed analysis hanya boleh membuat satu execution attempt.
 
 Indexes:
 
@@ -1215,15 +1215,15 @@ status     = PENDING | PUBLISHED
 UNIQUE(event_type, analysis_id)
 ```
 
-Outbox row is created atomically with the GENERATING analysis. Dispatcher publishes persistent messages with `message_id=outbox.id`, waits for publisher confirm, then marks PUBLISHED.
+Outbox row dibuat secara atomic bersama GENERATING analysis. Dispatcher mem-publish persistent message dengan `message_id=outbox.id`, menunggu publisher confirm, lalu menandai PUBLISHED.
 
-Duplicate publish/redelivery is allowed. Worker claims a GENERATING analysis with `worker_attempt_id + worker_started_at`; finalization must match the current claim. Fresh duplicate delivery with an active non-stale claim is a no-op, while redelivery/stale-lease recovery rotates the claim token so older work loses write authority.
+Duplicate publish/redelivery diperbolehkan. Worker melakukan claim pada GENERATING analysis menggunakan `worker_attempt_id + worker_started_at`; finalization wajib cocok dengan claim saat ini. Fresh duplicate delivery saat active non-stale claim masih berlaku menjadi no-op, sedangkan redelivery/stale-lease recovery memutar claim token agar pekerjaan lama kehilangan write authority.
 
 ---
 
 ## 7.18 `audit_events`
 
-Single append-only audit table with explicit scope.
+Satu append-only audit table digunakan dengan scope eksplisit.
 
 ```text
 audit_events
@@ -1303,7 +1303,7 @@ REANALYSIS_LIMIT_REACHED:
   max_reanalysis
 ```
 
-Audit is append-only. Policy events never use a fake case_id.
+Audit bersifat append-only. Policy event tidak pernah memakai fake `case_id`.
 ---
 
 # 8. Aturan Mutation Database
@@ -1328,7 +1328,7 @@ State/history dipertahankan untuk auditability.
 
 ## 8.2 Batas Critical Transaction
 
-AI job enqueue intent is part of the same DB transaction as workflow mutation.
+AI job enqueue intent menjadi bagian dari DB transaction yang sama dengan workflow mutation.
 
 Initial submit:
 
@@ -1364,7 +1364,7 @@ quota exhausted:
 COMMIT
 ```
 
-No Vertex or RabbitMQ network call runs inside the business transaction.
+Tidak ada network call Vertex atau RabbitMQ di dalam business transaction.
 
 ---
 
@@ -1432,7 +1432,7 @@ TOP_K = 8
 chunks + provenance + distance/relevance
 ```
 
-No similarity threshold and no second reranker in MVP.
+Tidak ada similarity threshold dan second reranker pada MVP.
 
 ---
 
@@ -1560,7 +1560,7 @@ NULL = field was not produced by a valid stage
 [] / {} = valid output was produced and is empty
 ```
 
-If provider/model/validation fails before valid structured analysis exists, result fields remain NULL. Do not fabricate placeholder business values.
+Jika provider/model/validation gagal sebelum valid structured analysis tersedia, result field tetap NULL. Jangan membuat placeholder business value.
 
 ---
 
@@ -2340,7 +2340,7 @@ image/jpeg
 image/png
 ```
 
-Stored `mime_type` is used by the AI context builder. Supported files are passed directly to Gemini using a GCS `gs://` URI; no custom OCR pipeline is required.
+`mime_type` yang tersimpan digunakan AI context builder. File yang didukung dikirim langsung ke Gemini menggunakan GCS URI `gs://`; tidak diperlukan custom OCR pipeline.
 
 ---
 
@@ -2666,7 +2666,7 @@ Generated sqlc code tidak diedit manual.
 
 # 30. Deployment
 
-One container image supports:
+Satu container image mendukung:
 
 ```text
 cmd/api    → sentinel-api   → Cloud Run Service
@@ -2692,7 +2692,7 @@ publisher confirms
 manual consumer acknowledgements
 ```
 
-Local Docker Compose includes PostgreSQL + pgvector + RabbitMQ.
+Docker Compose lokal mencakup PostgreSQL + pgvector + RabbitMQ.
 
 ---
 
