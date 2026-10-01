@@ -906,6 +906,8 @@ case_id               UUID          NOT NULL FK → cases.id
 version               INTEGER       NOT NULL
 status                VARCHAR(20)   NOT NULL
 technical_retry_count INTEGER       NOT NULL DEFAULT 0
+worker_attempt_id     UUID          NULL
+worker_started_at     TIMESTAMPTZ   NULL
 
 summary               TEXT          NULL
 
@@ -1215,7 +1217,7 @@ UNIQUE(event_type, analysis_id)
 
 Outbox row is created atomically with the GENERATING analysis. Dispatcher publishes persistent messages with `message_id=outbox.id`, waits for publisher confirm, then marks PUBLISHED.
 
-Duplicate publish/redelivery is allowed; worker finalization is state-idempotent.
+Duplicate publish/redelivery is allowed. Worker claims a GENERATING analysis with `worker_attempt_id + worker_started_at`; finalization must match the current claim. Fresh duplicate delivery with an active non-stale claim is a no-op, while redelivery/stale-lease recovery rotates the claim token so older work loses write authority.
 
 ---
 
@@ -2269,7 +2271,6 @@ Pagination:
 | ANALYSIS_NOT_FOUND | 404 |
 | INVALID_STATE_TRANSITION | 409 |
 | STALE_ANALYSIS | 409 |
-| POLICY_CONFLICT | 409 |
 | POLICY_INDEXING_FAILED | 502 |
 | INTERNAL_ERROR | 500 |
 
@@ -2365,6 +2366,7 @@ MAX_REANALYSIS=3
 AI_TECHNICAL_MAX_RETRIES=2
 POLICY_RETRIEVAL_TOP_K=8
 POLICY_INDEX_LEASE_SECONDS=900
+AI_WORKER_LEASE_SECONDS=900
 
 RABBITMQ_URL=amqps://...
 RABBITMQ_AI_QUEUE=sentinel.ai.analysis
