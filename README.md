@@ -1394,6 +1394,14 @@ case.status = ESCALATION_REQUIRED
 
 Technical Vertex/Gemini retry tidak membuat version baru dan tidak mengonsumsi quota re-analysis.
 
+Technical retry budget berasal dari application config yang dibaca dari environment:
+
+```env
+AI_TECHNICAL_MAX_RETRIES=2
+```
+
+Nilainya adalah jumlah retry setelah initial attempt. Tidak ada angka retry yang di-hard-code pada orchestration layer. Jika budget habis, analysis menjadi FAILED, audit `AI_ANALYSIS_FAILED` ditulis, dan case masuk `ESCALATION_REQUIRED`. Verifier `FAIL` bukan technical retry condition.
+
 ---
 
 # 14. Workflow Side Effects
@@ -2105,6 +2113,7 @@ VERTEX_AI_MODEL=...
 VERTEX_EMBEDDING_MODEL=...
 
 MAX_REANALYSIS=3
+AI_TECHNICAL_MAX_RETRIES=2
 POLICY_RETRIEVAL_TOP_K=8
 ```
 
