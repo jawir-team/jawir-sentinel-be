@@ -905,6 +905,7 @@ id                    UUID          PK
 case_id               UUID          NOT NULL FK → cases.id
 version               INTEGER       NOT NULL
 status                VARCHAR(20)   NOT NULL
+technical_retry_count INTEGER       NOT NULL DEFAULT 0
 
 summary               TEXT          NULL
 
@@ -2269,8 +2270,6 @@ Pagination:
 | INVALID_STATE_TRANSITION | 409 |
 | STALE_ANALYSIS | 409 |
 | POLICY_CONFLICT | 409 |
-| AI_OUTPUT_INVALID | 502 |
-| AI_ANALYSIS_FAILED | 502 |
 | POLICY_INDEXING_FAILED | 502 |
 | INTERNAL_ERROR | 500 |
 
