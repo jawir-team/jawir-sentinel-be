@@ -615,6 +615,7 @@ SIGNER    exactly 1 active at submit
 EXECUTER  exactly 1 active at submit
 
 participant mutation only while case.status = DRAFT
+same inactive user/role is reactivated in-place, not inserted again
 participant set frozen after submit
 ```
 
@@ -1120,6 +1121,14 @@ case_id     → cases.id       ON DELETE CASCADE
 analysis_id → ai_analyses.id ON DELETE RESTRICT
 executer_id → users.id       ON DELETE RESTRICT
 ```
+
+Constraint:
+
+```text
+UNIQUE(case_id, analysis_id)
+```
+
+One signed analysis can create at most one execution attempt.
 
 Indexes:
 
