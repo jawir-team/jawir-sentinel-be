@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,15 +10,29 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jawir-team/jawir-sentinel-be/internal/database"
 )
 
 func main() {
-	server, err := newServer()
-	if err != nil {
+	if err := run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func run() error {
+	server, err := newServer()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
 	log.Printf("sentinel-api listening on %s", server.Addr)
-	log.Fatal(server.ListenAndServe())
+	return server.ListenAndServe()
 }
 
 func newServer() (*http.Server, error) {

@@ -1,0 +1,4 @@
+@baseUrl = http://localhost:8080
+
+### Health — expected 200 OK, body kosong, tanpa authentication
+GET {{baseUrl}}/health
