@@ -48,3 +48,48 @@ SELECT id, policy_version_id, section, chunk_index, content, embedding, created_
 FROM policy_chunks
 WHERE policy_version_id = $1
 ORDER BY chunk_index, id;
+
+-- name: GetActivePolicyVersion :one
+SELECT id, policy_id, version, status, index_status, index_error, index_attempt_id,
+       index_started_at, indexed_at, content, file_path, effective_from,
+       effective_until, created_by, approved_by, created_at, approved_at
+FROM policy_versions
+WHERE policy_id = $1 AND status = 'ACTIVE';
+
+-- name: GetActivePolicyVersionForUpdate :one
+SELECT id, policy_id, version, status, index_status, index_error, index_attempt_id,
+       index_started_at, indexed_at, content, file_path, effective_from,
+       effective_until, created_by, approved_by, created_at, approved_at
+FROM policy_versions
+WHERE policy_id = $1 AND status = 'ACTIVE'
+FOR UPDATE;
+
+-- name: ClaimPolicyVersionIndex :one
+UPDATE policy_versions
+SET index_status = 'PROCESSING',
+    index_attempt_id = $2,
+    index_started_at = now(),
+    index_error = NULL,
+    indexed_at = NULL
+WHERE id = $1
+RETURNING id, policy_id, version, status, index_status, index_error, index_attempt_id,
+          index_started_at, indexed_at, content, file_path, effective_from,
+          effective_until, created_by, approved_by, created_at, approved_at;
+
+-- name: CompletePolicyVersionIndex :one
+UPDATE policy_versions
+SET index_status = $2,
+    index_error = $3,
+    indexed_at = CASE WHEN $2 = 'READY' THEN now() ELSE indexed_at END
+WHERE id = $1 AND index_attempt_id = $4
+RETURNING id, policy_id, version, status, index_status, index_error, index_attempt_id,
+          index_started_at, indexed_at, content, file_path, effective_from,
+          effective_until, created_by, approved_by, created_at, approved_at;
+
+-- name: UpdatePolicyVersionStatus :one
+UPDATE policy_versions
+SET status = $2
+WHERE id = $1
+RETURNING id, policy_id, version, status, index_status, index_error, index_attempt_id,
+          index_started_at, indexed_at, content, file_path, effective_from,
+          effective_until, created_by, approved_by, created_at, approved_at;

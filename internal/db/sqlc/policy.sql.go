@@ -8,6 +8,62 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimPolicyVersionIndex = `-- name: ClaimPolicyVersionIndex :one
+UPDATE policy_versions
+SET index_status = 'PROCESSING',
+    index_attempt_id = $2,
+    index_started_at = now(),
+    index_error = NULL,
+    indexed_at = NULL
+WHERE id = $1
+RETURNING id, policy_id, version, status, index_status, index_error, index_attempt_id,
+          index_started_at, indexed_at, content, file_path, effective_from,
+          effective_until, created_by, approved_by, created_at, approved_at`
+
+type ClaimPolicyVersionIndexParams struct {
+	ID             pgtype.UUID
+	IndexAttemptID pgtype.UUID
+}
+
+func (q *Queries) ClaimPolicyVersionIndex(ctx context.Context, arg ClaimPolicyVersionIndexParams) (PolicyVersion, error) {
+	row := q.dbx.QueryRow(ctx, claimPolicyVersionIndex, arg.ID, arg.IndexAttemptID)
+	var i PolicyVersion
+	err := row.Scan(
+		&i.ID, &i.PolicyID, &i.Version, &i.Status, &i.IndexStatus, &i.IndexError, &i.IndexAttemptID,
+		&i.IndexStartedAt, &i.IndexedAt, &i.Content, &i.FilePath, &i.EffectiveFrom,
+		&i.EffectiveUntil, &i.CreatedBy, &i.ApprovedBy, &i.CreatedAt, &i.ApprovedAt,
+	)
+	return i, err
+}
+
+const completePolicyVersionIndex = `-- name: CompletePolicyVersionIndex :one
+UPDATE policy_versions
+SET index_status = $2,
+    index_error = $3,
+    indexed_at = CASE WHEN $2 = 'READY' THEN now() ELSE indexed_at END
+WHERE id = $1 AND index_attempt_id = $4
+RETURNING id, policy_id, version, status, index_status, index_error, index_attempt_id,
+          index_started_at, indexed_at, content, file_path, effective_from,
+          effective_until, created_by, approved_by, created_at, approved_at`
+
+type CompletePolicyVersionIndexParams struct {
+	ID             pgtype.UUID
+	IndexStatus    string
+	IndexError     pgtype.Text
+	IndexAttemptID pgtype.UUID
+}
+
+func (q *Queries) CompletePolicyVersionIndex(ctx context.Context, arg CompletePolicyVersionIndexParams) (PolicyVersion, error) {
+	row := q.dbx.QueryRow(ctx, completePolicyVersionIndex, arg.ID, arg.IndexStatus, arg.IndexError, arg.IndexAttemptID)
+	var i PolicyVersion
+	err := row.Scan(
+		&i.ID, &i.PolicyID, &i.Version, &i.Status, &i.IndexStatus, &i.IndexError, &i.IndexAttemptID,
+		&i.IndexStartedAt, &i.IndexedAt, &i.Content, &i.FilePath, &i.EffectiveFrom,
+		&i.EffectiveUntil, &i.CreatedBy, &i.ApprovedBy, &i.CreatedAt, &i.ApprovedAt,
+	)
+	return i, err
+}
+
 const createPolicy = `-- name: CreatePolicy :one
 INSERT INTO policies (id, code, title, domain, case_type_id, description)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -49,6 +105,43 @@ type CreatePolicyVersionParams struct {
 
 func (q *Queries) CreatePolicyVersion(ctx context.Context, arg CreatePolicyVersionParams) (PolicyVersion, error) {
 	row := q.dbx.QueryRow(ctx, createPolicyVersion, arg.ID, arg.PolicyID, arg.Version, arg.Content, arg.FilePath, arg.CreatedBy, arg.EffectiveFrom, arg.EffectiveUntil)
+	var i PolicyVersion
+	err := row.Scan(
+		&i.ID, &i.PolicyID, &i.Version, &i.Status, &i.IndexStatus, &i.IndexError, &i.IndexAttemptID,
+		&i.IndexStartedAt, &i.IndexedAt, &i.Content, &i.FilePath, &i.EffectiveFrom,
+		&i.EffectiveUntil, &i.CreatedBy, &i.ApprovedBy, &i.CreatedAt, &i.ApprovedAt,
+	)
+	return i, err
+}
+
+const getActivePolicyVersion = `-- name: GetActivePolicyVersion :one
+SELECT id, policy_id, version, status, index_status, index_error, index_attempt_id,
+       index_started_at, indexed_at, content, file_path, effective_from,
+       effective_until, created_by, approved_by, created_at, approved_at
+FROM policy_versions
+WHERE policy_id = $1 AND status = 'ACTIVE'`
+
+func (q *Queries) GetActivePolicyVersion(ctx context.Context, policyID pgtype.UUID) (PolicyVersion, error) {
+	row := q.dbx.QueryRow(ctx, getActivePolicyVersion, policyID)
+	var i PolicyVersion
+	err := row.Scan(
+		&i.ID, &i.PolicyID, &i.Version, &i.Status, &i.IndexStatus, &i.IndexError, &i.IndexAttemptID,
+		&i.IndexStartedAt, &i.IndexedAt, &i.Content, &i.FilePath, &i.EffectiveFrom,
+		&i.EffectiveUntil, &i.CreatedBy, &i.ApprovedBy, &i.CreatedAt, &i.ApprovedAt,
+	)
+	return i, err
+}
+
+const getActivePolicyVersionForUpdate = `-- name: GetActivePolicyVersionForUpdate :one
+SELECT id, policy_id, version, status, index_status, index_error, index_attempt_id,
+       index_started_at, indexed_at, content, file_path, effective_from,
+       effective_until, created_by, approved_by, created_at, approved_at
+FROM policy_versions
+WHERE policy_id = $1 AND status = 'ACTIVE'
+FOR UPDATE`
+
+func (q *Queries) GetActivePolicyVersionForUpdate(ctx context.Context, policyID pgtype.UUID) (PolicyVersion, error) {
+	row := q.dbx.QueryRow(ctx, getActivePolicyVersionForUpdate, policyID)
 	var i PolicyVersion
 	err := row.Scan(
 		&i.ID, &i.PolicyID, &i.Version, &i.Status, &i.IndexStatus, &i.IndexError, &i.IndexAttemptID,
@@ -179,4 +272,28 @@ func (q *Queries) ListPolicyVersions(ctx context.Context, policyID pgtype.UUID) 
 		items = append(items, i)
 	}
 	return items, rows.Err()
+}
+
+const updatePolicyVersionStatus = `-- name: UpdatePolicyVersionStatus :one
+UPDATE policy_versions
+SET status = $2
+WHERE id = $1
+RETURNING id, policy_id, version, status, index_status, index_error, index_attempt_id,
+          index_started_at, indexed_at, content, file_path, effective_from,
+          effective_until, created_by, approved_by, created_at, approved_at`
+
+type UpdatePolicyVersionStatusParams struct {
+	ID     pgtype.UUID
+	Status string
+}
+
+func (q *Queries) UpdatePolicyVersionStatus(ctx context.Context, arg UpdatePolicyVersionStatusParams) (PolicyVersion, error) {
+	row := q.dbx.QueryRow(ctx, updatePolicyVersionStatus, arg.ID, arg.Status)
+	var i PolicyVersion
+	err := row.Scan(
+		&i.ID, &i.PolicyID, &i.Version, &i.Status, &i.IndexStatus, &i.IndexError, &i.IndexAttemptID,
+		&i.IndexStartedAt, &i.IndexedAt, &i.Content, &i.FilePath, &i.EffectiveFrom,
+		&i.EffectiveUntil, &i.CreatedBy, &i.ApprovedBy, &i.CreatedAt, &i.ApprovedAt,
+	)
+	return i, err
 }

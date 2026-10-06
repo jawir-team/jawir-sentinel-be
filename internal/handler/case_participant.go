@@ -140,6 +140,21 @@ func (q *TxQueries) RunCloseTx(ctx context.Context, fn func(context.Context, Clo
 	return tx.Commit(ctx)
 }
 
+func (q *TxQueries) RunPolicyActivationTx(ctx context.Context, fn func(context.Context, PolicyActivationTxQueries) error) error {
+	if q == nil || q.pool == nil {
+		return errors.New("policy activation transaction store is not configured")
+	}
+	tx, err := q.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(ctx, db.New(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 type assignParticipantRequest struct {
 	UserID   string `json:"user_id"`
 	Role     string `json:"role"`

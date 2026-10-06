@@ -11,7 +11,9 @@ import (
 type Querier interface {
 	AppendCaseAuditEvent(context.Context, AppendCaseAuditEventParams) (AuditEvent, error)
 	AppendPolicyAuditEvent(context.Context, AppendPolicyAuditEventParams) (AuditEvent, error)
+	ClaimPolicyVersionIndex(context.Context, ClaimPolicyVersionIndexParams) (PolicyVersion, error)
 	CloseCase(context.Context, CloseCaseParams) (Case, error)
+	CompletePolicyVersionIndex(context.Context, CompletePolicyVersionIndexParams) (PolicyVersion, error)
 	CountActiveAdmins(context.Context) (int64, error)
 	CountActiveParticipantsByRole(context.Context, CountActiveParticipantsByRoleParams) (int64, error)
 	CreateAnalysis(context.Context, CreateAnalysisParams) (AiAnalysis, error)
@@ -27,6 +29,8 @@ type Querier interface {
 	ExistsGeneratingAnalysis(context.Context, pgtype.UUID) (bool, error)
 	ExistsRunningExecution(context.Context, pgtype.UUID) (bool, error)
 	GetActiveParticipantForUpdate(context.Context, pgtype.UUID) (CaseParticipant, error)
+	GetActivePolicyVersion(context.Context, pgtype.UUID) (PolicyVersion, error)
+	GetActivePolicyVersionForUpdate(context.Context, pgtype.UUID) (PolicyVersion, error)
 	GetAnalysis(context.Context, pgtype.UUID) (AiAnalysis, error)
 	GetAnalysisForUpdate(context.Context, pgtype.UUID) (AiAnalysis, error)
 	GetCase(context.Context, pgtype.UUID) (Case, error)
@@ -63,5 +67,6 @@ type Querier interface {
 	UpdateCase(context.Context, UpdateCaseParams) (Case, error)
 	UpdateCaseStatus(context.Context, UpdateCaseStatusParams) (Case, error)
 	UpdateExecution(context.Context, UpdateExecutionParams) (Execution, error)
+	UpdatePolicyVersionStatus(context.Context, UpdatePolicyVersionStatusParams) (PolicyVersion, error)
 	UpdateUser(context.Context, UpdateUserParams) (User, error)
 }

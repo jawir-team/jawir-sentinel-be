@@ -106,6 +106,10 @@ func newServerWithStores(
 	protected.With(auth.RequireAuth).Get("/v1/policies/{id}/versions", handler.ListPolicyVersions(policyVersionStore))
 	protected.With(auth.RequireAdmin).Post("/v1/policies/{id}/versions", handler.CreatePolicyVersion(policyVersionStore))
 	protected.With(auth.RequireAuth).Get("/v1/policies/{id}/versions/{version_id}", handler.GetPolicyVersion(policyVersionStore))
+	policyActivationStore, _ := caseParticipantStore.(handler.PolicyActivationStore)
+	protected.With(auth.RequireAdmin).Post("/v1/policies/{id}/versions/{version_id}/claim-index", handler.ClaimPolicyVersionIndex(policyActivationStore))
+	protected.With(auth.RequireAdmin).Post("/v1/policies/{id}/versions/{version_id}/index-result", handler.CompletePolicyVersionIndex(policyActivationStore))
+	protected.With(auth.RequireAdmin).Post("/v1/policies/{id}/versions/{version_id}/activate", handler.ActivatePolicyVersion(policyActivationStore))
 	// Policy version content is immutable. A change is created through POST as
 	// a new version, so PUT, PATCH, and DELETE routes are intentionally absent.
 	protected.With(auth.RequireAuth).Get("/v1/cases", handler.ListCases(caseStore))

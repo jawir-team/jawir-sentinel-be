@@ -286,16 +286,15 @@ func parseOptionalPolicyVersionTime(value string) (pgtype.Timestamptz, error) {
 
 func newPolicyVersionResponse(version db.PolicyVersion) policyVersionResponse {
 	response := policyVersionResponse{
-		ID:          version.ID,
-		PolicyID:    version.PolicyID,
-		Version:     version.Version,
-		Status:      version.Status,
-		Content:     version.Content,
-		IndexStatus: version.IndexStatus,
-		CreatedBy:   version.CreatedBy,
-		CreatedAt:   version.CreatedAt,
-		IndexRecoverable: version.IndexStatus == "PROCESSING" &&
-			version.IndexStartedAt.Valid && time.Since(version.IndexStartedAt.Time) > policyIndexLease(),
+		ID:               version.ID,
+		PolicyID:         version.PolicyID,
+		Version:          version.Version,
+		Status:           version.Status,
+		Content:          version.Content,
+		IndexStatus:      version.IndexStatus,
+		CreatedBy:        version.CreatedBy,
+		CreatedAt:        version.CreatedAt,
+		IndexRecoverable: policyVersionIndexRecoverable(version, time.Now()),
 	}
 	if version.FilePath.Valid {
 		response.FilePath = &version.FilePath.String
@@ -320,6 +319,12 @@ func newPolicyVersionResponse(version db.PolicyVersion) policyVersionResponse {
 		response.IndexedAt = &version.IndexedAt.Time
 	}
 	return response
+}
+
+func policyVersionIndexRecoverable(version db.PolicyVersion, now time.Time) bool {
+	return version.IndexStatus == "PROCESSING" &&
+		version.IndexStartedAt.Valid &&
+		now.Sub(version.IndexStartedAt.Time) > policyIndexLease()
 }
 
 func policyIndexLease() time.Duration {
