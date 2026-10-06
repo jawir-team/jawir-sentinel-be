@@ -39,7 +39,8 @@ func run() error {
 		return err
 	}
 	queries := db.New(pool)
-	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries, queries, queries, queries)
+	txStore := handler.NewTxQueries(pool)
+	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries, queries, txStore, txStore, queries)
 	if err != nil {
 		return err
 	}
@@ -56,8 +57,9 @@ func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http
 	units, _ := users.(handler.UnitStore)
 	caseTypes, _ := users.(handler.CaseTypeStore)
 	caseStore, _ := users.(handler.CaseStore)
+	caseParticipantStore, _ := users.(handler.CaseParticipantStore)
 	userAPI, _ := users.(handler.UserStore)
-	return newServerWithStores(verifier, users, meUnits, units, caseTypes, caseStore, userAPI)
+	return newServerWithStores(verifier, users, meUnits, units, caseTypes, caseStore, caseParticipantStore, userAPI)
 }
 
 func newServerWithStores(
@@ -67,6 +69,7 @@ func newServerWithStores(
 	units handler.UnitStore,
 	caseTypes handler.CaseTypeStore,
 	caseStore handler.CaseStore,
+	caseParticipantStore handler.CaseParticipantStore,
 	userStores ...handler.UserStore,
 ) (*http.Server, error) {
 	port := os.Getenv("APP_PORT")
@@ -99,6 +102,8 @@ func newServerWithStores(
 	protected.With(auth.RequireAuth).Post("/v1/cases", handler.CreateCase(caseStore))
 	protected.With(auth.RequireAuth).Get("/v1/cases/{id}", handler.GetCase(caseStore))
 	protected.With(auth.RequireAuth).Patch("/v1/cases/{id}", handler.UpdateCase(caseStore))
+	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/participants", handler.AssignCaseParticipant(caseParticipantStore))
+	protected.With(auth.RequireAuth).Delete("/v1/cases/{id}/participants/{participant_id}", handler.UnassignCaseParticipant(caseParticipantStore))
 	var userStore handler.UserStore
 	if len(userStores) > 0 {
 		userStore = userStores[0]

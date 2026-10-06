@@ -8,6 +8,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countActiveParticipantsByRole = `-- name: CountActiveParticipantsByRole :one
+SELECT count(*)
+FROM case_participants
+WHERE case_id = $1
+  AND role = $2
+  AND status = 'ACTIVE'`
+
+type CountActiveParticipantsByRoleParams struct {
+	CaseID pgtype.UUID
+	Role   string
+}
+
+func (q *Queries) CountActiveParticipantsByRole(ctx context.Context, arg CountActiveParticipantsByRoleParams) (int64, error) {
+	row := q.dbx.QueryRow(ctx, countActiveParticipantsByRole, arg.CaseID, arg.Role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createCaseParticipant = `-- name: CreateCaseParticipant :one
 INSERT INTO case_participants (id, case_id, user_id, role, required, assigned_by)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -39,6 +58,27 @@ FOR UPDATE`
 
 func (q *Queries) GetActiveParticipantForUpdate(ctx context.Context, id pgtype.UUID) (CaseParticipant, error) {
 	row := q.dbx.QueryRow(ctx, getActiveParticipantForUpdate, id)
+	var i CaseParticipant
+	err := row.Scan(&i.ID, &i.CaseID, &i.UserID, &i.Role, &i.Required, &i.Status, &i.AssignedBy, &i.AssignedAt, &i.UnassignedAt)
+	return i, err
+}
+
+const getParticipantByCaseUserRole = `-- name: GetParticipantByCaseUserRole :one
+SELECT id, case_id, user_id, role, required, status, assigned_by,
+       assigned_at, unassigned_at
+FROM case_participants
+WHERE case_id = $1
+  AND user_id = $2
+  AND role = $3`
+
+type GetParticipantByCaseUserRoleParams struct {
+	CaseID pgtype.UUID
+	UserID pgtype.UUID
+	Role   string
+}
+
+func (q *Queries) GetParticipantByCaseUserRole(ctx context.Context, arg GetParticipantByCaseUserRoleParams) (CaseParticipant, error) {
+	row := q.dbx.QueryRow(ctx, getParticipantByCaseUserRole, arg.CaseID, arg.UserID, arg.Role)
 	var i CaseParticipant
 	err := row.Scan(&i.ID, &i.CaseID, &i.UserID, &i.Role, &i.Required, &i.Status, &i.AssignedBy, &i.AssignedAt, &i.UnassignedAt)
 	return i, err
@@ -87,6 +127,28 @@ func (q *Queries) ListCaseParticipants(ctx context.Context, caseID pgtype.UUID) 
 		items = append(items, i)
 	}
 	return items, rows.Err()
+}
+
+const reactivateCaseParticipant = `-- name: ReactivateCaseParticipant :one
+UPDATE case_participants
+SET status = 'ACTIVE',
+    unassigned_at = NULL,
+    assigned_by = $1,
+    assigned_at = now()
+WHERE id = $2 AND status = 'INACTIVE'
+RETURNING id, case_id, user_id, role, required, status, assigned_by,
+          assigned_at, unassigned_at`
+
+type ReactivateCaseParticipantParams struct {
+	AssignedBy pgtype.UUID
+	ID         pgtype.UUID
+}
+
+func (q *Queries) ReactivateCaseParticipant(ctx context.Context, arg ReactivateCaseParticipantParams) (CaseParticipant, error) {
+	row := q.dbx.QueryRow(ctx, reactivateCaseParticipant, arg.AssignedBy, arg.ID)
+	var i CaseParticipant
+	err := row.Scan(&i.ID, &i.CaseID, &i.UserID, &i.Role, &i.Required, &i.Status, &i.AssignedBy, &i.AssignedAt, &i.UnassignedAt)
+	return i, err
 }
 
 const unassignCaseParticipant = `-- name: UnassignCaseParticipant :one

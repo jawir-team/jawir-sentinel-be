@@ -94,6 +94,30 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 	return i, err
 }
 
+const getUserForUpdate = `-- name: GetUserForUpdate :one
+SELECT id, unit_id, firebase_uid, name, email, status, system_role, created_at, updated_at
+FROM users
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetUserForUpdate(ctx context.Context, id pgtype.UUID) (User, error) {
+	row := q.dbx.QueryRow(ctx, getUserForUpdate, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.UnitID,
+		&i.FirebaseUID,
+		&i.Name,
+		&i.Email,
+		&i.Status,
+		&i.SystemRole,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getUserByFirebaseUID = `-- name: GetUserByFirebaseUID :one
 SELECT id, unit_id, firebase_uid, name, email, status, system_role, created_at, updated_at
 FROM users

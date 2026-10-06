@@ -3,6 +3,12 @@ SELECT id, unit_id, firebase_uid, name, email, status, system_role, created_at, 
 FROM users
 WHERE id = $1;
 
+-- name: GetUserForUpdate :one
+SELECT id, unit_id, firebase_uid, name, email, status, system_role, created_at, updated_at
+FROM users
+WHERE id = $1
+FOR UPDATE;
+
 -- name: GetUserByFirebaseUID :one
 SELECT id, unit_id, firebase_uid, name, email, status, system_role, created_at, updated_at
 FROM users
