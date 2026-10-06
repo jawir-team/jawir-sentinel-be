@@ -298,6 +298,9 @@ func runAssignParticipant(ctx context.Context, q ParticipantTxQueries, caseID pg
 		}
 		return db.CaseParticipant{}, participantInternalError(err)
 	}
+	if apiErr := ValidateCaseSoD(append(participants, assigned)); apiErr != nil {
+		return db.CaseParticipant{}, apiErr
+	}
 	if apiErr := appendParticipantAuditEvent(q, ctx, caseID, actor, actorRole, participantEventAssigned); apiErr != nil {
 		return db.CaseParticipant{}, apiErr
 	}
