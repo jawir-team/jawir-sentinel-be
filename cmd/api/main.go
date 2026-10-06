@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jawir-team/jawir-sentinel-be/internal/database"
+	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
 )
 
 func main() {
@@ -49,6 +50,7 @@ func newServer() (*http.Server, error) {
 	}
 
 	router := chi.NewRouter()
+	router.Use(httpapi.Recoverer)
 	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
