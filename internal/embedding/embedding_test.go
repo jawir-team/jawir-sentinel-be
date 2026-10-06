@@ -108,6 +108,53 @@ func TestVertexEmbedderRejectsWrongDimension(t *testing.T) {
 	}
 }
 
+func TestVertexEmbedderEmbedQueryUsesRetrievalQueryTask(t *testing.T) {
+	vector := make([]float32, EmbeddingDimension)
+	server := newInMemoryHTTPTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Instances []struct {
+				TaskType string `json:"task_type"`
+				Content  struct {
+					Parts []struct {
+						Text string `json:"text"`
+					} `json:"parts"`
+				} `json:"content"`
+			} `json:"instances"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if len(request.Instances) != 1 || request.Instances[0].TaskType != TaskTypeQuery {
+			t.Errorf("instances = %+v", request.Instances)
+		}
+		if len(request.Instances) == 1 && (len(request.Instances[0].Content.Parts) != 1 || request.Instances[0].Content.Parts[0].Text != "case query") {
+			t.Errorf("content parts = %+v", request.Instances[0].Content.Parts)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"predictions": []any{map[string]any{
+				"embeddings": map[string]any{"values": vector},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	embedder, err := NewVertexEmbedder("project", "location", "token", server.Client())
+	if err != nil {
+		t.Fatalf("NewVertexEmbedder() error = %v", err)
+	}
+	embedder.endpoint = server.URL
+
+	got, err := embedder.EmbedQuery(context.Background(), "case query")
+	if err != nil {
+		t.Fatalf("EmbedQuery() error = %v", err)
+	}
+	if len(got) != EmbeddingDimension {
+		t.Fatalf("EmbedQuery() dimension = %d, want %d", len(got), EmbeddingDimension)
+	}
+}
+
 func TestNewVertexEmbedderRejectsMissingConfiguration(t *testing.T) {
 	tests := []struct {
 		name        string

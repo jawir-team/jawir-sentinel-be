@@ -99,10 +99,23 @@ type vertexPredictResponse struct {
 
 // EmbedDocuments requests retrieval-document embeddings from Vertex AI.
 func (e *VertexEmbedder) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.predict(ctx, texts, TaskTypeDocument)
+}
+
+// EmbedQuery requests a retrieval-query embedding from Vertex AI.
+func (e *VertexEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	vectors, err := e.predict(ctx, []string{text}, TaskTypeQuery)
+	if err != nil {
+		return nil, err
+	}
+	return vectors[0], nil
+}
+
+func (e *VertexEmbedder) predict(ctx context.Context, texts []string, taskType string) ([][]float32, error) {
 	instances := make([]vertexInstance, len(texts))
 	for i, text := range texts {
 		instances[i] = vertexInstance{
-			TaskType: TaskTypeDocument,
+			TaskType: taskType,
 			Content:  vertexContent{Parts: []vertexPart{{Text: text}}},
 		}
 	}

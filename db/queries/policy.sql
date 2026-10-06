@@ -101,3 +101,19 @@ DELETE FROM policy_chunks WHERE policy_version_id = $1;
 INSERT INTO policy_chunks (id, policy_version_id, section, chunk_index, content, embedding)
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, policy_version_id, section, chunk_index, content, embedding, created_at;
+
+-- name: SearchPolicyChunks :many
+SELECT pc.id AS chunk_id, pc.policy_version_id, pc.chunk_index, pc.section, pc.content,
+       (pc.embedding <=> $1::vector) AS distance,
+       pv.id AS version_id, pv.version AS version,
+       p.id AS policy_id, p.code AS policy_code, p.title AS policy_title
+FROM policy_chunks pc
+JOIN policy_versions pv ON pv.id = pc.policy_version_id
+JOIN policies p ON p.id = pv.policy_id
+WHERE pv.status = 'ACTIVE'
+  AND pv.index_status = 'READY'
+  AND (pv.effective_from IS NULL OR pv.effective_from <= now())
+  AND (pv.effective_until IS NULL OR pv.effective_until > now())
+  AND (p.case_type_id = $2 OR p.case_type_id IS NULL)
+ORDER BY pc.embedding <=> $1::vector
+LIMIT $3;

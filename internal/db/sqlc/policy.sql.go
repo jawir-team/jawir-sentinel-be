@@ -311,6 +311,76 @@ func (q *Queries) ListPolicyVersions(ctx context.Context, policyID pgtype.UUID) 
 	return items, rows.Err()
 }
 
+const searchPolicyChunks = `-- name: SearchPolicyChunks :many
+SELECT pc.id AS chunk_id, pc.policy_version_id, pc.chunk_index, pc.section, pc.content,
+       (pc.embedding <=> $1::vector) AS distance,
+       pv.id AS version_id, pv.version AS version,
+       p.id AS policy_id, p.code AS policy_code, p.title AS policy_title
+FROM policy_chunks pc
+JOIN policy_versions pv ON pv.id = pc.policy_version_id
+JOIN policies p ON p.id = pv.policy_id
+WHERE pv.status = 'ACTIVE'
+  AND pv.index_status = 'READY'
+  AND (pv.effective_from IS NULL OR pv.effective_from <= now())
+  AND (pv.effective_until IS NULL OR pv.effective_until > now())
+  AND (p.case_type_id = $2 OR p.case_type_id IS NULL)
+ORDER BY pc.embedding <=> $1::vector
+LIMIT $3`
+
+type SearchPolicyChunksParams struct {
+	QueryEmbedding string
+	CaseTypeID     pgtype.UUID
+	Limit          int32
+}
+
+type SearchPolicyChunksRow struct {
+	ChunkID         pgtype.UUID
+	PolicyVersionID pgtype.UUID
+	ChunkIndex      int32
+	Section         pgtype.Text
+	Content         string
+	Distance        float64
+	VersionID       pgtype.UUID
+	Version         string
+	PolicyID        pgtype.UUID
+	PolicyCode      string
+	PolicyTitle     string
+}
+
+// SearchPolicyChunks performs the fixed policy-retrieval contract: there is no
+// domain filter; query vectors use gemini-embedding-001 with RETRIEVAL_QUERY at
+// 768 dimensions; cosine HNSW search uses <=> and
+// idx_policy_chunks_embedding_hnsw; callers request top_k=8; and neither a
+// similarity threshold nor a reranker is applied.
+func (q *Queries) SearchPolicyChunks(ctx context.Context, arg SearchPolicyChunksParams) ([]SearchPolicyChunksRow, error) {
+	rows, err := q.dbx.Query(ctx, searchPolicyChunks, arg.QueryEmbedding, arg.CaseTypeID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]SearchPolicyChunksRow, 0)
+	for rows.Next() {
+		var i SearchPolicyChunksRow
+		if err := rows.Scan(
+			&i.ChunkID,
+			&i.PolicyVersionID,
+			&i.ChunkIndex,
+			&i.Section,
+			&i.Content,
+			&i.Distance,
+			&i.VersionID,
+			&i.Version,
+			&i.PolicyID,
+			&i.PolicyCode,
+			&i.PolicyTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
 const updatePolicyVersionStatus = `-- name: UpdatePolicyVersionStatus :one
 UPDATE policy_versions
 SET status = $2

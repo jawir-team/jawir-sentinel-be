@@ -64,6 +64,7 @@ type Querier interface {
 	MarkOutboxEventPublished(context.Context, MarkOutboxEventPublishedParams) (OutboxEvent, error)
 	ReactivateCaseParticipant(context.Context, ReactivateCaseParticipantParams) (CaseParticipant, error)
 	RecordOutboxAttempt(context.Context, RecordOutboxAttemptParams) (OutboxEvent, error)
+	SearchPolicyChunks(context.Context, SearchPolicyChunksParams) ([]SearchPolicyChunksRow, error)
 	UnassignCaseParticipant(context.Context, pgtype.UUID) (CaseParticipant, error)
 	UpdateAnalysisResult(context.Context, UpdateAnalysisResultParams) (AiAnalysis, error)
 	UpdateCase(context.Context, UpdateCaseParams) (Case, error)
