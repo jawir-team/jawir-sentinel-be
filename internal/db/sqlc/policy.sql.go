@@ -85,6 +85,35 @@ func (q *Queries) CreatePolicy(ctx context.Context, arg CreatePolicyParams) (Pol
 	return i, err
 }
 
+const createPolicyChunk = `-- name: CreatePolicyChunk :one
+INSERT INTO policy_chunks (id, policy_version_id, section, chunk_index, content, embedding)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, policy_version_id, section, chunk_index, content, embedding, created_at`
+
+type CreatePolicyChunkParams struct {
+	ID              pgtype.UUID
+	PolicyVersionID pgtype.UUID
+	Section         pgtype.Text
+	ChunkIndex      int32
+	Content         string
+	// Embedding is a pgvector text literal in the form "[v1,v2,...]".
+	Embedding string
+}
+
+func (q *Queries) CreatePolicyChunk(ctx context.Context, arg CreatePolicyChunkParams) (PolicyChunk, error) {
+	row := q.dbx.QueryRow(ctx, createPolicyChunk,
+		arg.ID,
+		arg.PolicyVersionID,
+		arg.Section,
+		arg.ChunkIndex,
+		arg.Content,
+		arg.Embedding,
+	)
+	var i PolicyChunk
+	err := row.Scan(&i.ID, &i.PolicyVersionID, &i.Section, &i.ChunkIndex, &i.Content, &i.Embedding, &i.CreatedAt)
+	return i, err
+}
+
 const createPolicyVersion = `-- name: CreatePolicyVersion :one
 INSERT INTO policy_versions (id, policy_id, version, content, file_path, created_by, effective_from, effective_until)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -112,6 +141,14 @@ func (q *Queries) CreatePolicyVersion(ctx context.Context, arg CreatePolicyVersi
 		&i.EffectiveUntil, &i.CreatedBy, &i.ApprovedBy, &i.CreatedAt, &i.ApprovedAt,
 	)
 	return i, err
+}
+
+const deletePolicyChunks = `-- name: DeletePolicyChunks :exec
+DELETE FROM policy_chunks WHERE policy_version_id = $1`
+
+func (q *Queries) DeletePolicyChunks(ctx context.Context, policyVersionID pgtype.UUID) error {
+	_, err := q.dbx.Exec(ctx, deletePolicyChunks, policyVersionID)
+	return err
 }
 
 const getActivePolicyVersion = `-- name: GetActivePolicyVersion :one

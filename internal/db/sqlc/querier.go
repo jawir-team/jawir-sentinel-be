@@ -23,9 +23,11 @@ type Querier interface {
 	CreateExecution(context.Context, CreateExecutionParams) (Execution, error)
 	CreateOutboxEvent(context.Context, CreateOutboxEventParams) (OutboxEvent, error)
 	CreatePolicy(context.Context, CreatePolicyParams) (Policy, error)
+	CreatePolicyChunk(context.Context, CreatePolicyChunkParams) (PolicyChunk, error)
 	CreatePolicyVersion(context.Context, CreatePolicyVersionParams) (PolicyVersion, error)
 	CreateUnit(context.Context, CreateUnitParams) (Unit, error)
 	CreateUser(context.Context, CreateUserParams) (User, error)
+	DeletePolicyChunks(context.Context, pgtype.UUID) error
 	ExistsGeneratingAnalysis(context.Context, pgtype.UUID) (bool, error)
 	ExistsRunningExecution(context.Context, pgtype.UUID) (bool, error)
 	GetActiveParticipantForUpdate(context.Context, pgtype.UUID) (CaseParticipant, error)

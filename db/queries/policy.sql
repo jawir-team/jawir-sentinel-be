@@ -93,3 +93,11 @@ WHERE id = $1
 RETURNING id, policy_id, version, status, index_status, index_error, index_attempt_id,
           index_started_at, indexed_at, content, file_path, effective_from,
           effective_until, created_by, approved_by, created_at, approved_at;
+
+-- name: DeletePolicyChunks :exec
+DELETE FROM policy_chunks WHERE policy_version_id = $1;
+
+-- name: CreatePolicyChunk :one
+INSERT INTO policy_chunks (id, policy_version_id, section, chunk_index, content, embedding)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, policy_version_id, section, chunk_index, content, embedding, created_at;
