@@ -13,6 +13,7 @@ import (
 	"github.com/jawir-team/jawir-sentinel-be/internal/auth"
 	"github.com/jawir-team/jawir-sentinel-be/internal/database"
 	db "github.com/jawir-team/jawir-sentinel-be/internal/db/sqlc"
+	"github.com/jawir-team/jawir-sentinel-be/internal/handler"
 	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
 	"github.com/jawir-team/jawir-sentinel-be/internal/logging"
 )
@@ -37,7 +38,8 @@ func run() error {
 	if err := database.Migrate(ctx, pool); err != nil {
 		return err
 	}
-	server, err := newServerWithAuth(auth.NewVerifier(), db.New(pool))
+	queries := db.New(pool)
+	server, err := newServerWithStores(auth.NewVerifier(), queries, queries)
 	if err != nil {
 		return err
 	}
@@ -50,6 +52,11 @@ func newServer() (*http.Server, error) {
 }
 
 func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http.Server, error) {
+	units, _ := users.(handler.UnitStore)
+	return newServerWithStores(verifier, users, units)
+}
+
+func newServerWithStores(verifier auth.TokenVerifier, users auth.UserStore, units handler.UnitStore) (*http.Server, error) {
 	port := os.Getenv("APP_PORT")
 	if port == "" {
 		port = "8080"
@@ -71,6 +78,7 @@ func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http
 
 	protected := chi.NewRouter()
 	protected.Use(auth.Middleware(verifier, users))
+	protected.Get("/v1/me", handler.GetMe(units))
 	// Catch-all: auth middleware must run even for undefined /api paths,
 	// so register a wildcard route instead of relying on NotFound (which
 	// bypasses middleware on mounted routers).
