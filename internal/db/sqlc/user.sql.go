@@ -4,13 +4,35 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countActiveAdmins = `-- name: CountActiveAdmins :one
+SELECT count(*)
+FROM users
+WHERE status = 'ACTIVE' AND system_role = 'ADMIN'
+`
+
+func (q *Queries) CountActiveAdmins(ctx context.Context) (int64, error) {
+	row := q.dbx.QueryRow(ctx, countActiveAdmins)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (id, unit_id, firebase_uid, name, email)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO users (id, unit_id, firebase_uid, name, email, status, system_role)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7
+)
 RETURNING id, unit_id, firebase_uid, name, email, status, system_role, created_at, updated_at
 `
 
@@ -20,6 +42,8 @@ type CreateUserParams struct {
 	FirebaseUID string
 	Name        string
 	Email       string
+	Status      string
+	SystemRole  string
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -29,6 +53,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		arg.FirebaseUID,
 		arg.Name,
 		arg.Email,
+		arg.Status,
+		arg.SystemRole,
 	)
 	var i User
 	err := row.Scan(
@@ -91,6 +117,75 @@ func (q *Queries) GetUserByFirebaseUID(ctx context.Context, firebaseUID string) 
 	return i, err
 }
 
+const listUsers = `-- name: ListUsers :many
+SELECT id, unit_id, name, email, status, system_role, created_at, updated_at
+FROM users
+WHERE (
+    $1::text = ''
+    OR name ILIKE '%' || $1::text || '%'
+    OR email ILIKE '%' || $1::text || '%'
+)
+AND (
+    $2::text = ''
+    OR status = $2::text
+)
+ORDER BY name, id
+LIMIT $3::integer
+OFFSET $4::integer
+`
+
+type ListUsersParams struct {
+	Search string
+	Status string
+	Limit  int32
+	Offset int32
+}
+
+type ListUsersRow struct {
+	ID         pgtype.UUID `json:"id"`
+	UnitID     pgtype.UUID `json:"unit_id"`
+	Name       string      `json:"name"`
+	Email      string      `json:"email"`
+	Status     string      `json:"status"`
+	SystemRole string      `json:"system_role"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
+}
+
+func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error) {
+	rows, err := q.dbx.Query(ctx, listUsers,
+		arg.Search,
+		arg.Status,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]ListUsersRow, 0)
+	for rows.Next() {
+		var i ListUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UnitID,
+			&i.Name,
+			&i.Email,
+			&i.Status,
+			&i.SystemRole,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsersByUnit = `-- name: ListUsersByUnit :many
 SELECT id, unit_id, firebase_uid, name, email, status, system_role, created_at, updated_at
 FROM users
@@ -126,4 +221,74 @@ func (q *Queries) ListUsersByUnit(ctx context.Context, unitID pgtype.UUID) ([]Us
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateUser = `-- name: UpdateUser :one
+WITH active_admins AS MATERIALIZED (
+    SELECT id
+    FROM users
+    WHERE status = 'ACTIVE'
+      AND system_role = 'ADMIN'
+      AND (
+          $1::text <> 'ACTIVE'
+          OR $2::text <> 'ADMIN'
+      )
+    ORDER BY id
+    FOR UPDATE
+)
+UPDATE users AS target
+SET unit_id = $3,
+    name = $4,
+    email = $5,
+    status = $1,
+    system_role = $2,
+    updated_at = now()
+WHERE target.id = $6
+  AND (
+      target.status <> 'ACTIVE'
+      OR target.system_role <> 'ADMIN'
+      OR (
+          $1::text = 'ACTIVE'
+          AND $2::text = 'ADMIN'
+      )
+      OR EXISTS (
+          SELECT 1
+          FROM active_admins
+          WHERE active_admins.id <> target.id
+      )
+  )
+RETURNING id, unit_id, firebase_uid, name, email, status, system_role, created_at, updated_at
+`
+
+type UpdateUserParams struct {
+	Status     string
+	SystemRole string
+	UnitID     pgtype.UUID
+	Name       string
+	Email      string
+	ID         pgtype.UUID
+}
+
+func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
+	row := q.dbx.QueryRow(ctx, updateUser,
+		arg.Status,
+		arg.SystemRole,
+		arg.UnitID,
+		arg.Name,
+		arg.Email,
+		arg.ID,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.UnitID,
+		&i.FirebaseUID,
+		&i.Name,
+		&i.Email,
+		&i.Status,
+		&i.SystemRole,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
