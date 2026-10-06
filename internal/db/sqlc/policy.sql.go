@@ -30,23 +30,25 @@ func (q *Queries) CreatePolicy(ctx context.Context, arg CreatePolicyParams) (Pol
 }
 
 const createPolicyVersion = `-- name: CreatePolicyVersion :one
-INSERT INTO policy_versions (id, policy_id, version, content, file_path, created_by)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO policy_versions (id, policy_id, version, content, file_path, created_by, effective_from, effective_until)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id, policy_id, version, status, index_status, index_error, index_attempt_id,
           index_started_at, indexed_at, content, file_path, effective_from,
           effective_until, created_by, approved_by, created_at, approved_at`
 
 type CreatePolicyVersionParams struct {
-	ID        pgtype.UUID
-	PolicyID  pgtype.UUID
-	Version   string
-	Content   string
-	FilePath  pgtype.Text
-	CreatedBy pgtype.UUID
+	ID             pgtype.UUID
+	PolicyID       pgtype.UUID
+	Version        string
+	Content        string
+	FilePath       pgtype.Text
+	CreatedBy      pgtype.UUID
+	EffectiveFrom  pgtype.Timestamptz
+	EffectiveUntil pgtype.Timestamptz
 }
 
 func (q *Queries) CreatePolicyVersion(ctx context.Context, arg CreatePolicyVersionParams) (PolicyVersion, error) {
-	row := q.dbx.QueryRow(ctx, createPolicyVersion, arg.ID, arg.PolicyID, arg.Version, arg.Content, arg.FilePath, arg.CreatedBy)
+	row := q.dbx.QueryRow(ctx, createPolicyVersion, arg.ID, arg.PolicyID, arg.Version, arg.Content, arg.FilePath, arg.CreatedBy, arg.EffectiveFrom, arg.EffectiveUntil)
 	var i PolicyVersion
 	err := row.Scan(
 		&i.ID, &i.PolicyID, &i.Version, &i.Status, &i.IndexStatus, &i.IndexError, &i.IndexAttemptID,
@@ -65,6 +67,24 @@ func (q *Queries) GetPolicy(ctx context.Context, id pgtype.UUID) (Policy, error)
 	row := q.dbx.QueryRow(ctx, getPolicy, id)
 	var i Policy
 	err := row.Scan(&i.ID, &i.Code, &i.Title, &i.Domain, &i.CaseTypeID, &i.Description, &i.CreatedAt, &i.UpdatedAt)
+	return i, err
+}
+
+const getPolicyVersion = `-- name: GetPolicyVersion :one
+SELECT id, policy_id, version, status, index_status, index_error, index_attempt_id,
+       index_started_at, indexed_at, content, file_path, effective_from,
+       effective_until, created_by, approved_by, created_at, approved_at
+FROM policy_versions
+WHERE id = $1`
+
+func (q *Queries) GetPolicyVersion(ctx context.Context, id pgtype.UUID) (PolicyVersion, error) {
+	row := q.dbx.QueryRow(ctx, getPolicyVersion, id)
+	var i PolicyVersion
+	err := row.Scan(
+		&i.ID, &i.PolicyID, &i.Version, &i.Status, &i.IndexStatus, &i.IndexError, &i.IndexAttemptID,
+		&i.IndexStartedAt, &i.IndexedAt, &i.Content, &i.FilePath, &i.EffectiveFrom,
+		&i.EffectiveUntil, &i.CreatedBy, &i.ApprovedBy, &i.CreatedAt, &i.ApprovedAt,
+	)
 	return i, err
 }
 
@@ -125,6 +145,35 @@ func (q *Queries) ListPolicyChunks(ctx context.Context, policyVersionID pgtype.U
 	for rows.Next() {
 		var i PolicyChunk
 		if err := rows.Scan(&i.ID, &i.PolicyVersionID, &i.Section, &i.ChunkIndex, &i.Content, &i.Embedding, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+const listPolicyVersions = `-- name: ListPolicyVersions :many
+SELECT id, policy_id, version, status, index_status, index_error, index_attempt_id,
+       index_started_at, indexed_at, content, file_path, effective_from,
+       effective_until, created_by, approved_by, created_at, approved_at
+FROM policy_versions
+WHERE policy_id = $1
+ORDER BY created_at, id`
+
+func (q *Queries) ListPolicyVersions(ctx context.Context, policyID pgtype.UUID) ([]PolicyVersion, error) {
+	rows, err := q.dbx.Query(ctx, listPolicyVersions, policyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]PolicyVersion, 0)
+	for rows.Next() {
+		var i PolicyVersion
+		if err := rows.Scan(
+			&i.ID, &i.PolicyID, &i.Version, &i.Status, &i.IndexStatus, &i.IndexError, &i.IndexAttemptID,
+			&i.IndexStartedAt, &i.IndexedAt, &i.Content, &i.FilePath, &i.EffectiveFrom,
+			&i.EffectiveUntil, &i.CreatedBy, &i.ApprovedBy, &i.CreatedAt, &i.ApprovedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

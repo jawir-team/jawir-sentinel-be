@@ -40,7 +40,7 @@ func run() error {
 	}
 	queries := db.New(pool)
 	txStore := handler.NewTxQueries(pool)
-	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries, queries, txStore, txStore, queries)
+	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries, queries, txStore, txStore, queries, queries)
 	if err != nil {
 		return err
 	}
@@ -59,7 +59,8 @@ func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http
 	caseStore, _ := users.(handler.CaseStore)
 	caseParticipantStore, _ := users.(handler.CaseParticipantStore)
 	userAPI, _ := users.(handler.UserStore)
-	return newServerWithStores(verifier, users, meUnits, units, caseTypes, caseStore, caseParticipantStore, userAPI)
+	policyVersions, _ := users.(handler.PolicyVersionStore)
+	return newServerWithStores(verifier, users, meUnits, units, caseTypes, caseStore, caseParticipantStore, policyVersions, userAPI)
 }
 
 func newServerWithStores(
@@ -70,6 +71,7 @@ func newServerWithStores(
 	caseTypes handler.CaseTypeStore,
 	caseStore handler.CaseStore,
 	caseParticipantStore handler.CaseParticipantStore,
+	policyVersionStore handler.PolicyVersionStore,
 	userStores ...handler.UserStore,
 ) (*http.Server, error) {
 	port := os.Getenv("APP_PORT")
@@ -101,6 +103,11 @@ func newServerWithStores(
 	policyStore, _ := caseParticipantStore.(handler.PolicyStore)
 	protected.With(auth.RequireAuth).Get("/v1/policies", handler.ListPolicies(policyStore))
 	protected.With(auth.RequireAdmin).Post("/v1/policies", handler.CreatePolicy(policyStore))
+	protected.With(auth.RequireAuth).Get("/v1/policies/{id}/versions", handler.ListPolicyVersions(policyVersionStore))
+	protected.With(auth.RequireAdmin).Post("/v1/policies/{id}/versions", handler.CreatePolicyVersion(policyVersionStore))
+	protected.With(auth.RequireAuth).Get("/v1/policies/{id}/versions/{version_id}", handler.GetPolicyVersion(policyVersionStore))
+	// Policy version content is immutable. A change is created through POST as
+	// a new version, so PUT, PATCH, and DELETE routes are intentionally absent.
 	protected.With(auth.RequireAuth).Get("/v1/cases", handler.ListCases(caseStore))
 	protected.With(auth.RequireAuth).Post("/v1/cases", handler.CreateCase(caseStore))
 	protected.With(auth.RequireAuth).Get("/v1/cases/{id}", handler.GetCase(caseStore))

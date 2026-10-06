@@ -21,12 +21,27 @@ FROM policy_versions
 WHERE id = $1
 FOR UPDATE;
 
+-- name: GetPolicyVersion :one
+SELECT id, policy_id, version, status, index_status, index_error, index_attempt_id,
+       index_started_at, indexed_at, content, file_path, effective_from,
+       effective_until, created_by, approved_by, created_at, approved_at
+FROM policy_versions
+WHERE id = $1;
+
 -- name: CreatePolicyVersion :one
-INSERT INTO policy_versions (id, policy_id, version, content, file_path, created_by)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO policy_versions (id, policy_id, version, content, file_path, created_by, effective_from, effective_until)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id, policy_id, version, status, index_status, index_error, index_attempt_id,
           index_started_at, indexed_at, content, file_path, effective_from,
           effective_until, created_by, approved_by, created_at, approved_at;
+
+-- name: ListPolicyVersions :many
+SELECT id, policy_id, version, status, index_status, index_error, index_attempt_id,
+       index_started_at, indexed_at, content, file_path, effective_from,
+       effective_until, created_by, approved_by, created_at, approved_at
+FROM policy_versions
+WHERE policy_id = $1
+ORDER BY created_at, id;
 
 -- name: ListPolicyChunks :many
 SELECT id, policy_version_id, section, chunk_index, content, embedding, created_at
