@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -12,11 +12,15 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jawir-team/jawir-sentinel-be/internal/database"
 	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
+	"github.com/jawir-team/jawir-sentinel-be/internal/logging"
 )
 
 func main() {
+	logger := logging.New(os.Stdout, slog.LevelInfo)
+	slog.SetDefault(logger)
 	if err := run(); err != nil {
-		log.Fatal(err)
+		logger.Error("sentinel-api stopped", "error", err)
+		os.Exit(1)
 	}
 }
 
@@ -35,7 +39,7 @@ func run() error {
 	if err := database.Migrate(ctx, pool); err != nil {
 		return err
 	}
-	log.Printf("sentinel-api listening on %s", server.Addr)
+	slog.Info("sentinel-api listening", "address", server.Addr, "component", "api")
 	return server.ListenAndServe()
 }
 
@@ -50,6 +54,7 @@ func newServer() (*http.Server, error) {
 	}
 
 	router := chi.NewRouter()
+	router.Use(logging.RequestID)
 	router.Use(httpapi.Recoverer)
 	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
