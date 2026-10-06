@@ -10,6 +10,10 @@ import (
 
 type Querier interface {
 	CreateUnit(context.Context, CreateUnitParams) (Unit, error)
+	CreateUser(context.Context, CreateUserParams) (User, error)
 	GetUnit(context.Context, pgtype.UUID) (Unit, error)
+	GetUser(context.Context, pgtype.UUID) (User, error)
+	GetUserByFirebaseUID(context.Context, string) (User, error)
 	ListUnits(context.Context) ([]Unit, error)
+	ListUsersByUnit(context.Context, pgtype.UUID) ([]User, error)
 }

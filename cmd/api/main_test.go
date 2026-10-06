@@ -37,10 +37,12 @@ func TestServer(t *testing.T) {
 			if server.Addr != tt.addr {
 				t.Fatalf("address = %q, want %q", server.Addr, tt.addr)
 			}
-			response := httptest.NewRecorder()
-			server.Handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health", nil))
-			if response.Code != http.StatusOK {
-				t.Fatalf("unauthenticated GET /health = %d, want 200", response.Code)
+			for _, path := range []string{"/health", "/healthz"} {
+				response := httptest.NewRecorder()
+				server.Handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+				if response.Code != http.StatusOK {
+					t.Fatalf("unauthenticated GET %s = %d, want 200", path, response.Code)
+				}
 			}
 		})
 	}
@@ -60,5 +62,22 @@ func TestServerPropagatesRequestID(t *testing.T) {
 
 	if got := response.Header().Get(logging.RequestIDHeader); got != "gateway-request-123" {
 		t.Errorf("response request ID = %q, want gateway-request-123", got)
+	}
+}
+
+func TestServerProtectsAPIRoutes(t *testing.T) {
+	t.Setenv("APP_PORT", "8080")
+	server, err := newServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/private", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	response := httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/private = %d, want 401", response.Code)
 	}
 }

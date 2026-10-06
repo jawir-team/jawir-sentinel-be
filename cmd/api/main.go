@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jawir-team/jawir-sentinel-be/internal/auth"
 	"github.com/jawir-team/jawir-sentinel-be/internal/database"
+	db "github.com/jawir-team/jawir-sentinel-be/internal/db/sqlc"
 	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
 	"github.com/jawir-team/jawir-sentinel-be/internal/logging"
 )
@@ -25,10 +27,6 @@ func main() {
 }
 
 func run() error {
-	server, err := newServer()
-	if err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	pool, err := database.Open(ctx, os.Getenv("DATABASE_URL"))
@@ -39,11 +37,19 @@ func run() error {
 	if err := database.Migrate(ctx, pool); err != nil {
 		return err
 	}
+	server, err := newServerWithAuth(auth.NewVerifier(), db.New(pool))
+	if err != nil {
+		return err
+	}
 	slog.Info("sentinel-api listening", "address", server.Addr, "component", "api")
 	return server.ListenAndServe()
 }
 
 func newServer() (*http.Server, error) {
+	return newServerWithAuth(auth.NewVerifier(), nil)
+}
+
+func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http.Server, error) {
 	port := os.Getenv("APP_PORT")
 	if port == "" {
 		port = "8080"
@@ -59,6 +65,19 @@ func newServer() (*http.Server, error) {
 	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	protected := chi.NewRouter()
+	protected.Use(auth.Middleware(verifier, users))
+	// Catch-all: auth middleware must run even for undefined /api paths,
+	// so register a wildcard route instead of relying on NotFound (which
+	// bypasses middleware on mounted routers).
+	protected.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		httpapi.WriteError(w, httpapi.NewError(httpapi.CodeInvalidRequest, "not found", nil))
+	})
+	router.Mount("/api", protected)
 
 	return &http.Server{
 		Addr:              fmt.Sprintf(":%d", n),
