@@ -15,7 +15,9 @@ const (
 	CodePolicyNotFound               ErrorCode = "POLICY_NOT_FOUND"
 	CodeAnalysisNotFound             ErrorCode = "ANALYSIS_NOT_FOUND"
 	CodeConflict                     ErrorCode = "CONFLICT"
+	CodeCardinalityViolation         ErrorCode = "CARDINALITY_VIOLATION"
 	CodeInvalidStateTransition       ErrorCode = "INVALID_STATE_TRANSITION"
+	CodeValidationError              ErrorCode = "VALIDATION_ERROR"
 	CodeStaleAnalysis                ErrorCode = "STALE_ANALYSIS"
 	CodePolicyIndexingFailed         ErrorCode = "POLICY_INDEXING_FAILED"
 	CodeInternalError                ErrorCode = "INTERNAL_ERROR"
@@ -75,7 +77,7 @@ func (e *APIError) Unwrap() error {
 
 func statusForCode(code ErrorCode) (int, bool) {
 	switch code {
-	case CodeInvalidRequest:
+	case CodeInvalidRequest, CodeValidationError:
 		return http.StatusBadRequest, true
 	case CodeUnauthorized:
 		return http.StatusUnauthorized, true
@@ -83,7 +85,7 @@ func statusForCode(code ErrorCode) (int, bool) {
 		return http.StatusForbidden, true
 	case CodeUserNotFound, CodeCaseNotFound, CodePolicyNotFound, CodeAnalysisNotFound:
 		return http.StatusNotFound, true
-	case CodeConflict, CodeInvalidStateTransition, CodeStaleAnalysis:
+	case CodeConflict, CodeCardinalityViolation, CodeInvalidStateTransition, CodeStaleAnalysis:
 		return http.StatusConflict, true
 	case CodePolicyIndexingFailed:
 		return http.StatusBadGateway, true
@@ -114,8 +116,12 @@ func defaultMessage(code ErrorCode) string {
 		return "Analysis not found."
 	case CodeConflict:
 		return "The request conflicts with the current resource state."
+	case CodeCardinalityViolation:
+		return "The case participant requirements are not satisfied."
 	case CodeInvalidStateTransition:
 		return "The requested state transition is not allowed."
+	case CodeValidationError:
+		return "The case failed validation."
 	case CodeStaleAnalysis:
 		return "Analysis version is no longer current."
 	case CodePolicyIndexingFailed:

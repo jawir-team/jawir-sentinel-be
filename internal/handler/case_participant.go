@@ -47,6 +47,19 @@ type ParticipantTxQueries interface {
 
 var _ ParticipantTxQueries = (*db.Queries)(nil)
 
+// SubmitTxQueries is the query boundary used by case submission transactions.
+// *db.Queries satisfies this interface.
+type SubmitTxQueries interface {
+	GetCaseForUpdate(context.Context, pgtype.UUID) (db.Case, error)
+	ListCaseParticipants(context.Context, pgtype.UUID) ([]db.CaseParticipant, error)
+	UpdateCaseStatus(context.Context, db.UpdateCaseStatusParams) (db.Case, error)
+	CreateAnalysis(context.Context, db.CreateAnalysisParams) (db.AiAnalysis, error)
+	CreateOutboxEvent(context.Context, db.CreateOutboxEventParams) (db.OutboxEvent, error)
+	AppendCaseAuditEvent(context.Context, db.AppendCaseAuditEventParams) (db.AuditEvent, error)
+}
+
+var _ SubmitTxQueries = (*db.Queries)(nil)
+
 // CaseParticipantStore runs participant changes atomically.
 type CaseParticipantStore interface {
 	RunParticipantTx(context.Context, func(context.Context, ParticipantTxQueries) error) error
@@ -61,6 +74,7 @@ type TxQueries struct {
 var (
 	_ CaseStore            = (*TxQueries)(nil)
 	_ CaseParticipantStore = (*TxQueries)(nil)
+	_ SubmitCaseStore      = (*TxQueries)(nil)
 )
 
 func NewTxQueries(pool *pgxpool.Pool) *TxQueries {
@@ -70,6 +84,21 @@ func NewTxQueries(pool *pgxpool.Pool) *TxQueries {
 func (q *TxQueries) RunParticipantTx(ctx context.Context, fn func(context.Context, ParticipantTxQueries) error) error {
 	if q == nil || q.pool == nil {
 		return errors.New("participant transaction store is not configured")
+	}
+	tx, err := q.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(ctx, db.New(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (q *TxQueries) RunSubmitTx(ctx context.Context, fn func(context.Context, SubmitTxQueries) error) error {
+	if q == nil || q.pool == nil {
+		return errors.New("submit transaction store is not configured")
 	}
 	tx, err := q.pool.Begin(ctx)
 	if err != nil {
@@ -364,6 +393,18 @@ func participantActorRole(participants []db.CaseParticipant, actor auth.User) (s
 	return "", false
 }
 
+// nullableWorkflowActorRole converts an actor role to a NULL-safe pgtype.Text.
+// audit_events.audit_events_actor_role_check only allows the four workflow
+// roles (or NULL), so a system ADMIN acting without a case role is stored as NULL.
+func nullableWorkflowActorRole(role string) pgtype.Text {
+	switch role {
+	case caseRoleMaker, caseRoleChecker, caseRoleSigner, caseRoleExecuter:
+		return pgtype.Text{String: role, Valid: true}
+	default:
+		return pgtype.Text{Valid: false}
+	}
+}
+
 func appendParticipantAuditEvent(q ParticipantTxQueries, ctx context.Context, caseID pgtype.UUID, actor auth.User, actorRole, eventType string) *httpapi.APIError {
 	auditID, err := newUnitUUID()
 	if err != nil {
@@ -374,7 +415,7 @@ func appendParticipantAuditEvent(q ParticipantTxQueries, ctx context.Context, ca
 		CaseID:    caseID,
 		EventType: eventType,
 		ActorID:   actor.ID,
-		ActorRole: pgtype.Text{String: actorRole, Valid: true},
+		ActorRole: nullableWorkflowActorRole(actorRole),
 		Metadata:  []byte(`{}`),
 	})
 	if err != nil {
