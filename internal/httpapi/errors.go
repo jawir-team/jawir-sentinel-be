@@ -14,6 +14,7 @@ const (
 	CodeCaseNotFound                 ErrorCode = "CASE_NOT_FOUND"
 	CodePolicyNotFound               ErrorCode = "POLICY_NOT_FOUND"
 	CodeAnalysisNotFound             ErrorCode = "ANALYSIS_NOT_FOUND"
+	CodeConflict                     ErrorCode = "CONFLICT"
 	CodeInvalidStateTransition       ErrorCode = "INVALID_STATE_TRANSITION"
 	CodeStaleAnalysis                ErrorCode = "STALE_ANALYSIS"
 	CodePolicyIndexingFailed         ErrorCode = "POLICY_INDEXING_FAILED"
@@ -82,7 +83,7 @@ func statusForCode(code ErrorCode) (int, bool) {
 		return http.StatusForbidden, true
 	case CodeUserNotFound, CodeCaseNotFound, CodePolicyNotFound, CodeAnalysisNotFound:
 		return http.StatusNotFound, true
-	case CodeInvalidStateTransition, CodeStaleAnalysis:
+	case CodeConflict, CodeInvalidStateTransition, CodeStaleAnalysis:
 		return http.StatusConflict, true
 	case CodePolicyIndexingFailed:
 		return http.StatusBadGateway, true
@@ -111,6 +112,8 @@ func defaultMessage(code ErrorCode) string {
 		return "Policy not found."
 	case CodeAnalysisNotFound:
 		return "Analysis not found."
+	case CodeConflict:
+		return "The request conflicts with the current resource state."
 	case CodeInvalidStateTransition:
 		return "The requested state transition is not allowed."
 	case CodeStaleAnalysis:

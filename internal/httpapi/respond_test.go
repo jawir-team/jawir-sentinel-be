@@ -26,6 +26,7 @@ func TestWriteErrorPublicMapping(t *testing.T) {
 		{"case not found", httpapi.CodeCaseNotFound, http.StatusNotFound},
 		{"policy not found", httpapi.CodePolicyNotFound, http.StatusNotFound},
 		{"analysis not found", httpapi.CodeAnalysisNotFound, http.StatusNotFound},
+		{"conflict", httpapi.CodeConflict, http.StatusConflict},
 		{"invalid state transition", httpapi.CodeInvalidStateTransition, http.StatusConflict},
 		{"stale analysis", httpapi.CodeStaleAnalysis, http.StatusConflict},
 		{"policy indexing failed", httpapi.CodePolicyIndexingFailed, http.StatusBadGateway},

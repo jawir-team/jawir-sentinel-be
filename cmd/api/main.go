@@ -39,7 +39,7 @@ func run() error {
 		return err
 	}
 	queries := db.New(pool)
-	server, err := newServerWithStores(auth.NewVerifier(), queries, queries)
+	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries)
 	if err != nil {
 		return err
 	}
@@ -52,11 +52,17 @@ func newServer() (*http.Server, error) {
 }
 
 func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http.Server, error) {
+	meUnits, _ := users.(handler.MeUnitStore)
 	units, _ := users.(handler.UnitStore)
-	return newServerWithStores(verifier, users, units)
+	return newServerWithStores(verifier, users, meUnits, units)
 }
 
-func newServerWithStores(verifier auth.TokenVerifier, users auth.UserStore, units handler.UnitStore) (*http.Server, error) {
+func newServerWithStores(
+	verifier auth.TokenVerifier,
+	users auth.UserStore,
+	meUnits handler.MeUnitStore,
+	units handler.UnitStore,
+) (*http.Server, error) {
 	port := os.Getenv("APP_PORT")
 	if port == "" {
 		port = "8080"
@@ -78,7 +84,9 @@ func newServerWithStores(verifier auth.TokenVerifier, users auth.UserStore, unit
 
 	protected := chi.NewRouter()
 	protected.Use(auth.Middleware(verifier, users))
-	protected.Get("/v1/me", handler.GetMe(units))
+	protected.Get("/v1/me", handler.GetMe(meUnits))
+	protected.With(auth.RequireAuth).Get("/v1/units", handler.ListUnits(units))
+	protected.With(auth.RequireAdmin).Post("/v1/units", handler.CreateUnit(units))
 	// Catch-all: auth middleware must run even for undefined /api paths,
 	// so register a wildcard route instead of relying on NotFound (which
 	// bypasses middleware on mounted routers).

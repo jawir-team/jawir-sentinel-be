@@ -12,9 +12,9 @@ import (
 	"github.com/jawir-team/jawir-sentinel-be/internal/logging"
 )
 
-// UnitStore is the database boundary needed by GetMe. *db.Queries satisfies
+// MeUnitStore is the database boundary needed by GetMe. *db.Queries satisfies
 // this interface.
-type UnitStore interface {
+type MeUnitStore interface {
 	GetUnit(context.Context, pgtype.UUID) (db.Unit, error)
 }
 
@@ -35,7 +35,7 @@ type meUnitResponse struct {
 // GetMe returns the authenticated Sentinel user and their unit. Authentication
 // middleware normally guarantees a valid unit ID; the nil unit response is a
 // defensive fallback for contexts created outside that middleware.
-func GetMe(units UnitStore) http.HandlerFunc {
+func GetMe(units MeUnitStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := auth.FromContext(r.Context())
 		if !ok {
