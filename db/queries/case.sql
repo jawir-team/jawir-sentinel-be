@@ -63,3 +63,12 @@ WHERE id = sqlc.arg(id)
 RETURNING id, case_number, case_type_id, title, description, urgency, status,
           created_by, owner_id, current_analysis_id, closed_by, close_reason,
           closed_at, created_at, updated_at;
+
+-- name: CloseCase :one
+UPDATE cases
+SET status = 'CLOSED', closed_by = $2, close_reason = $3,
+    closed_at = now(), updated_at = now()
+WHERE id = $1
+RETURNING id, case_number, case_type_id, title, description, urgency, status,
+          created_by, owner_id, current_analysis_id, closed_by, close_reason,
+          closed_at, created_at, updated_at;

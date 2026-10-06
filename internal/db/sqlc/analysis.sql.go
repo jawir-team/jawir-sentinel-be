@@ -39,6 +39,16 @@ func (q *Queries) CreateAnalysis(ctx context.Context, arg CreateAnalysisParams) 
 	return i, err
 }
 
+const existsGeneratingAnalysis = `-- name: ExistsGeneratingAnalysis :one
+SELECT EXISTS(SELECT 1 FROM ai_analyses WHERE case_id = $1 AND status = 'GENERATING')`
+
+func (q *Queries) ExistsGeneratingAnalysis(ctx context.Context, caseID pgtype.UUID) (bool, error) {
+	row := q.dbx.QueryRow(ctx, existsGeneratingAnalysis, caseID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const getAnalysis = `-- name: GetAnalysis :one
 SELECT id, case_id, version, status, technical_retry_count, worker_attempt_id,
        worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,

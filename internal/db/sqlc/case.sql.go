@@ -8,6 +8,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const closeCase = `-- name: CloseCase :one
+UPDATE cases
+SET status = 'CLOSED', closed_by = $2, close_reason = $3,
+    closed_at = now(), updated_at = now()
+WHERE id = $1
+RETURNING id, case_number, case_type_id, title, description, urgency, status,
+          created_by, owner_id, current_analysis_id, closed_by, close_reason,
+          closed_at, created_at, updated_at`
+
+type CloseCaseParams struct {
+	ID          pgtype.UUID
+	ClosedBy    pgtype.UUID
+	CloseReason string
+}
+
+func (q *Queries) CloseCase(ctx context.Context, arg CloseCaseParams) (Case, error) {
+	row := q.dbx.QueryRow(ctx, closeCase, arg.ID, arg.ClosedBy, arg.CloseReason)
+	var i Case
+	err := row.Scan(&i.ID, &i.CaseNumber, &i.CaseTypeID, &i.Title, &i.Description, &i.Urgency, &i.Status, &i.CreatedBy, &i.OwnerID, &i.CurrentAnalysisID, &i.ClosedBy, &i.CloseReason, &i.ClosedAt, &i.CreatedAt, &i.UpdatedAt)
+	return i, err
+}
+
 const createCase = `-- name: CreateCase :one
 INSERT INTO cases (id, case_number, case_type_id, title, description, urgency, created_by, owner_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

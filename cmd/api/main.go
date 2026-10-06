@@ -104,6 +104,8 @@ func newServerWithStores(
 	protected.With(auth.RequireAuth).Patch("/v1/cases/{id}", handler.UpdateCase(caseStore))
 	submitCaseStore, _ := caseParticipantStore.(handler.SubmitCaseStore)
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/submit", handler.SubmitCase(submitCaseStore))
+	closeCaseStore, _ := caseParticipantStore.(handler.CloseCaseStore)
+	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/close", handler.CloseCase(closeCaseStore))
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/participants", handler.AssignCaseParticipant(caseParticipantStore))
 	protected.With(auth.RequireAuth).Delete("/v1/cases/{id}/participants/{participant_id}", handler.UnassignCaseParticipant(caseParticipantStore))
 	var userStore handler.UserStore

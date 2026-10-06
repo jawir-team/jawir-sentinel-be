@@ -60,6 +60,19 @@ type SubmitTxQueries interface {
 
 var _ SubmitTxQueries = (*db.Queries)(nil)
 
+// CloseTxQueries is the query boundary used by case closure transactions.
+// *db.Queries satisfies this interface.
+type CloseTxQueries interface {
+	GetCaseForUpdate(context.Context, pgtype.UUID) (db.Case, error)
+	ListCaseParticipants(context.Context, pgtype.UUID) ([]db.CaseParticipant, error)
+	ExistsGeneratingAnalysis(context.Context, pgtype.UUID) (bool, error)
+	ExistsRunningExecution(context.Context, pgtype.UUID) (bool, error)
+	CloseCase(context.Context, db.CloseCaseParams) (db.Case, error)
+	AppendCaseAuditEvent(context.Context, db.AppendCaseAuditEventParams) (db.AuditEvent, error)
+}
+
+var _ CloseTxQueries = (*db.Queries)(nil)
+
 // CaseParticipantStore runs participant changes atomically.
 type CaseParticipantStore interface {
 	RunParticipantTx(context.Context, func(context.Context, ParticipantTxQueries) error) error
@@ -74,6 +87,7 @@ type TxQueries struct {
 var (
 	_ CaseStore            = (*TxQueries)(nil)
 	_ CaseParticipantStore = (*TxQueries)(nil)
+	_ CloseCaseStore       = (*TxQueries)(nil)
 	_ SubmitCaseStore      = (*TxQueries)(nil)
 )
 
@@ -99,6 +113,21 @@ func (q *TxQueries) RunParticipantTx(ctx context.Context, fn func(context.Contex
 func (q *TxQueries) RunSubmitTx(ctx context.Context, fn func(context.Context, SubmitTxQueries) error) error {
 	if q == nil || q.pool == nil {
 		return errors.New("submit transaction store is not configured")
+	}
+	tx, err := q.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(ctx, db.New(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (q *TxQueries) RunCloseTx(ctx context.Context, fn func(context.Context, CloseTxQueries) error) error {
+	if q == nil || q.pool == nil {
+		return errors.New("close transaction store is not configured")
 	}
 	tx, err := q.pool.Begin(ctx)
 	if err != nil {

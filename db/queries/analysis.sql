@@ -39,3 +39,6 @@ RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id
           compliance_analysis, recommendation, alternatives, missing_information,
           policy_status, evidence_quality, uncertainty, verification_status,
           verification_notes, model_name, prompt_version, created_at;
+
+-- name: ExistsGeneratingAnalysis :one
+SELECT EXISTS(SELECT 1 FROM ai_analyses WHERE case_id = $1 AND status = 'GENERATING');
