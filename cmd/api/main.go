@@ -31,6 +31,9 @@ func run() error {
 		return err
 	}
 	defer pool.Close()
+	if err := database.Migrate(ctx, pool); err != nil {
+		return err
+	}
 	log.Printf("sentinel-api listening on %s", server.Addr)
 	return server.ListenAndServe()
 }

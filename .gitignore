@@ -3,4 +3,6 @@
 !.env.example
 /api
 /bin/
-docs/
+docs/*
+!docs/tasks/
+!docs/tasks/*.md
