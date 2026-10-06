@@ -12,6 +12,15 @@ FROM case_participants
 WHERE id = $1 AND status = 'ACTIVE'
 FOR UPDATE;
 
+-- name: IsActiveCaseParticipant :one
+SELECT EXISTS (
+    SELECT 1
+    FROM case_participants
+    WHERE case_id = sqlc.arg(case_id)
+      AND user_id = sqlc.arg(user_id)
+      AND status = 'ACTIVE'
+) AS is_participant;
+
 -- name: CreateCaseParticipant :one
 INSERT INTO case_participants (id, case_id, user_id, role, required, assigned_by)
 VALUES ($1, $2, $3, $4, $5, $6)
