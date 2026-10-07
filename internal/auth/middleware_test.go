@@ -106,7 +106,7 @@ func TestMiddlewareRejectsInvalidToken(t *testing.T) {
 
 	handler.ServeHTTP(response, request)
 
-	assertAPIError(t, response, http.StatusUnauthorized, httpapi.CodeUnauthorized)
+	assertAPIError(t, response, http.StatusUnauthorized, httpapi.CodeUnauthorized, "Authentication credentials are invalid or expired.")
 	if verifier.calls != 1 || verifier.gotToken != "invalid-token" {
 		t.Errorf("verifier calls = %d, token = %q", verifier.calls, verifier.gotToken)
 	}
@@ -149,7 +149,7 @@ func TestMiddlewareRejectsMalformedAuthorization(t *testing.T) {
 
 			handler.ServeHTTP(response, request)
 
-			assertAPIError(t, response, http.StatusUnauthorized, httpapi.CodeUnauthorized)
+			assertAPIError(t, response, http.StatusUnauthorized, httpapi.CodeUnauthorized, "Authentication credentials are required.")
 			if verifier.calls != 0 {
 				t.Errorf("verifier calls = %d, want 0", verifier.calls)
 			}
@@ -172,7 +172,7 @@ func TestMiddlewareRejectsUnmappedUID(t *testing.T) {
 	}))
 	response := serveAuthorized(handler, "valid-token")
 
-	assertAPIError(t, response, http.StatusUnauthorized, httpapi.CodeUnauthorized)
+	assertAPIError(t, response, http.StatusUnauthorized, httpapi.CodeUnauthorized, "Authentication credentials are invalid or expired.")
 	if users.calls != 1 || users.gotUID != "unmapped-firebase-user" {
 		t.Errorf("store calls = %d, UID = %q", users.calls, users.gotUID)
 	}
@@ -192,7 +192,7 @@ func TestMiddlewareRejectsInactiveUser(t *testing.T) {
 	}))
 	response := serveAuthorized(handler, "valid-token")
 
-	assertAPIError(t, response, http.StatusUnauthorized, httpapi.CodeUnauthorized)
+	assertAPIError(t, response, http.StatusUnauthorized, httpapi.CodeUnauthorized, "Authentication credentials are invalid or expired.")
 	if verifier.calls != 1 || users.calls != 1 {
 		t.Errorf("verifier calls = %d, store calls = %d; want 1 each", verifier.calls, users.calls)
 	}
@@ -227,7 +227,7 @@ func serveAuthorized(handler http.Handler, token string) *httptest.ResponseRecor
 	return response
 }
 
-func assertAPIError(t *testing.T, response *httptest.ResponseRecorder, status int, code httpapi.ErrorCode) {
+func assertAPIError(t *testing.T, response *httptest.ResponseRecorder, status int, code httpapi.ErrorCode, messages ...string) {
 	t.Helper()
 	if response.Code != status {
 		t.Fatalf("status = %d, want %d; body=%s", response.Code, status, response.Body.String())
@@ -242,8 +242,8 @@ func assertAPIError(t *testing.T, response *httptest.ResponseRecorder, status in
 	if body.Error.Code != code {
 		t.Errorf("error code = %q, want %q", body.Error.Code, code)
 	}
-	if body.Error.Message == "" {
-		t.Error("error message must not be empty")
+	if len(messages) > 0 && body.Error.Message != messages[0] {
+		t.Errorf("error message = %q, want %q", body.Error.Message, messages[0])
 	}
 	if body.Error.Details == nil || len(body.Error.Details) != 0 {
 		t.Errorf("error details = %#v, want empty object", body.Error.Details)

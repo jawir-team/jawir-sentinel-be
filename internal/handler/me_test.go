@@ -113,7 +113,7 @@ func TestGetMeRejectsMissingAuthenticatedUser(t *testing.T) {
 	assertJSONResponse(t, response, http.StatusUnauthorized, map[string]any{
 		"error": map[string]any{
 			"code":    "UNAUTHORIZED",
-			"message": "Authentication is required.",
+			"message": "Authentication credentials are required.",
 			"details": map[string]any{},
 		},
 	})

@@ -6,11 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jawir-team/jawir-sentinel-be/internal/auth"
+	"github.com/jawir-team/jawir-sentinel-be/internal/config"
 	"github.com/jawir-team/jawir-sentinel-be/internal/database"
 	db "github.com/jawir-team/jawir-sentinel-be/internal/db/sqlc"
 	"github.com/jawir-team/jawir-sentinel-be/internal/handler"
@@ -30,9 +30,17 @@ func main() {
 }
 
 func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	pool, err := database.Open(ctx, os.Getenv("DATABASE_URL"))
+	verifier, err := auth.NewVerifier(ctx, cfg.FirebaseProjectID)
+	if err != nil {
+		return err
+	}
+	pool, err := database.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -44,7 +52,7 @@ func run() error {
 	txStore := handler.NewTxQueries(pool)
 	reanalysisService := reanalysis.New(pool)
 	fileStorage := storage.NewFromEnv()
-	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries, queries, txStore, txStore, reanalysisService, queries, fileStorage, queries)
+	server, err := newServerWithStores(cfg.AppPort, verifier, queries, queries, queries, queries, txStore, txStore, reanalysisService, queries, fileStorage, queries)
 	if err != nil {
 		return err
 	}
@@ -52,11 +60,11 @@ func run() error {
 	return server.ListenAndServe()
 }
 
-func newServer() (*http.Server, error) {
-	return newServerWithAuth(auth.NewVerifier(), nil)
+func newServer(port int) (*http.Server, error) {
+	return newServerWithAuth(port, nil, nil)
 }
 
-func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http.Server, error) {
+func newServerWithAuth(port int, verifier auth.TokenVerifier, users auth.UserStore) (*http.Server, error) {
 	meUnits, _ := users.(handler.MeUnitStore)
 	units, _ := users.(handler.UnitStore)
 	caseTypes, _ := users.(handler.CaseTypeStore)
@@ -64,10 +72,11 @@ func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http
 	caseParticipantStore, _ := users.(handler.CaseParticipantStore)
 	userAPI, _ := users.(handler.UserStore)
 	policyVersions, _ := users.(handler.PolicyVersionStore)
-	return newServerWithStores(verifier, users, meUnits, units, caseTypes, caseStore, caseParticipantStore, nil, policyVersions, nil, userAPI)
+	return newServerWithStores(port, verifier, users, meUnits, units, caseTypes, caseStore, caseParticipantStore, nil, policyVersions, nil, userAPI)
 }
 
 func newServerWithStores(
+	port int,
 	verifier auth.TokenVerifier,
 	users auth.UserStore,
 	meUnits handler.MeUnitStore,
@@ -80,12 +89,7 @@ func newServerWithStores(
 	fileStorage storage.Store,
 	userStores ...handler.UserStore,
 ) (*http.Server, error) {
-	port := os.Getenv("APP_PORT")
-	if port == "" {
-		port = "8080"
-	}
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
+	if port < 1 || port > 65535 {
 		return nil, fmt.Errorf("APP_PORT must be an integer between 1 and 65535")
 	}
 
@@ -158,7 +162,7 @@ func newServerWithStores(
 	router.Mount("/api", protected)
 
 	return &http.Server{
-		Addr:              fmt.Sprintf(":%d", n),
+		Addr:              fmt.Sprintf(":%d", port),
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

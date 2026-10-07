@@ -49,21 +49,19 @@ func (f *meRouteStore) GetUnit(_ context.Context, id pgtype.UUID) (db.Unit, erro
 
 func TestServer(t *testing.T) {
 	for _, tt := range []struct {
-		port string
+		port int
 		addr string
 	}{
-		{"", ":8080"},
-		{"9090", ":9090"},
-		{"1", ":1"},
-		{"65535", ":65535"},
-		{"0", ""},
-		{"-1", ""},
-		{"65536", ""},
-		{"invalid", ""},
+		{8080, ":8080"},
+		{9090, ":9090"},
+		{1, ":1"},
+		{65535, ":65535"},
+		{0, ""},
+		{-1, ""},
+		{65536, ""},
 	} {
-		t.Run("port="+tt.port, func(t *testing.T) {
-			t.Setenv("APP_PORT", tt.port)
-			server, err := newServer()
+		t.Run("port", func(t *testing.T) {
+			server, err := newServer(tt.port)
 			if tt.addr == "" {
 				if err == nil {
 					t.Fatal("expected invalid port to be rejected")
@@ -89,7 +87,7 @@ func TestServer(t *testing.T) {
 
 func TestServerPropagatesRequestID(t *testing.T) {
 	t.Setenv("APP_PORT", "8080")
-	server, err := newServer()
+	server, err := newServer(8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +104,7 @@ func TestServerPropagatesRequestID(t *testing.T) {
 
 func TestServerProtectsAPIRoutes(t *testing.T) {
 	t.Setenv("APP_PORT", "8080")
-	server, err := newServer()
+	server, err := newServer(8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +143,7 @@ func TestServerServesAuthenticatedMe(t *testing.T) {
 					Name: "Route Unit",
 				},
 			}
-			server, err := newServerWithAuth(verifier, store)
+			server, err := newServerWithAuth(8080, verifier, store)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -217,7 +215,7 @@ func TestServerDoesNotExposeUnversionedMeRoute(t *testing.T) {
 	}
 	verifier := &meRouteVerifier{uid: storedUser.FirebaseUID}
 	store := &meRouteStore{user: storedUser}
-	server, err := newServerWithAuth(verifier, store)
+	server, err := newServerWithAuth(8080, verifier, store)
 	if err != nil {
 		t.Fatal(err)
 	}
