@@ -16,6 +16,7 @@ import (
 	"github.com/jawir-team/jawir-sentinel-be/internal/handler"
 	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
 	"github.com/jawir-team/jawir-sentinel-be/internal/logging"
+	"github.com/jawir-team/jawir-sentinel-be/internal/reanalysis"
 	"github.com/jawir-team/jawir-sentinel-be/internal/storage"
 )
 
@@ -41,8 +42,9 @@ func run() error {
 	}
 	queries := db.New(pool)
 	txStore := handler.NewTxQueries(pool)
+	reanalysisService := reanalysis.New(pool)
 	fileStorage := storage.NewFromEnv()
-	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries, queries, txStore, txStore, queries, fileStorage, queries)
+	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries, queries, txStore, txStore, reanalysisService, queries, fileStorage, queries)
 	if err != nil {
 		return err
 	}
@@ -62,7 +64,7 @@ func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http
 	caseParticipantStore, _ := users.(handler.CaseParticipantStore)
 	userAPI, _ := users.(handler.UserStore)
 	policyVersions, _ := users.(handler.PolicyVersionStore)
-	return newServerWithStores(verifier, users, meUnits, units, caseTypes, caseStore, caseParticipantStore, policyVersions, nil, userAPI)
+	return newServerWithStores(verifier, users, meUnits, units, caseTypes, caseStore, caseParticipantStore, nil, policyVersions, nil, userAPI)
 }
 
 func newServerWithStores(
@@ -73,6 +75,7 @@ func newServerWithStores(
 	caseTypes handler.CaseTypeStore,
 	caseStore handler.CaseStore,
 	caseParticipantStore handler.CaseParticipantStore,
+	reanalysisOrchestrator handler.ReanalysisOrchestrator,
 	policyVersionStore handler.PolicyVersionStore,
 	fileStorage storage.Store,
 	userStores ...handler.UserStore,
@@ -123,6 +126,10 @@ func newServerWithStores(
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/submit", handler.SubmitCase(submitCaseStore))
 	closeCaseStore, _ := caseParticipantStore.(handler.CloseCaseStore)
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/close", handler.CloseCase(closeCaseStore))
+	checkerDecisionStore, _ := caseParticipantStore.(handler.CheckerDecisionStore)
+	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/checker-decisions", handler.RecordCheckerDecision(handler.CheckerDecider{
+		Store: checkerDecisionStore, Reanalysis: reanalysisOrchestrator,
+	}))
 	evidenceStore, _ := caseParticipantStore.(handler.EvidenceStore)
 	protected.With(auth.RequireAuth).Get("/v1/cases/{id}/evidences", handler.ListCaseEvidences(evidenceStore))
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/evidences", handler.AddCaseEvidence(evidenceStore))

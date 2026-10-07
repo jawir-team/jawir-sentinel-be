@@ -93,6 +93,7 @@ type TxQueries struct {
 var (
 	_ CaseStore            = (*TxQueries)(nil)
 	_ CaseParticipantStore = (*TxQueries)(nil)
+	_ CheckerDecisionStore = (*TxQueries)(nil)
 	_ CloseCaseStore       = (*TxQueries)(nil)
 	_ EvidenceStore        = (*TxQueries)(nil)
 	_ IndexTxStore         = (*TxQueries)(nil)
@@ -136,6 +137,21 @@ func (q *TxQueries) RunSubmitTx(ctx context.Context, fn func(context.Context, Su
 func (q *TxQueries) RunCloseTx(ctx context.Context, fn func(context.Context, CloseTxQueries) error) error {
 	if q == nil || q.pool == nil {
 		return errors.New("close transaction store is not configured")
+	}
+	tx, err := q.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(ctx, db.New(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (q *TxQueries) RunCheckerDecisionTx(ctx context.Context, fn func(context.Context, CheckerDecisionTxQueries) error) error {
+	if q == nil || q.pool == nil {
+		return errors.New("checker decision transaction store is not configured")
 	}
 	tx, err := q.pool.Begin(ctx)
 	if err != nil {
