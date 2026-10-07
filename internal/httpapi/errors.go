@@ -6,6 +6,7 @@ import "net/http"
 type ErrorCode string
 
 const (
+	CodeAIOutputInvalid              ErrorCode = "AI_OUTPUT_INVALID"
 	CodeInvalidRequest               ErrorCode = "INVALID_REQUEST"
 	CodeUnauthorized                 ErrorCode = "UNAUTHORIZED"
 	CodeForbidden                    ErrorCode = "FORBIDDEN"
@@ -79,6 +80,8 @@ func statusForCode(code ErrorCode) (int, bool) {
 	switch code {
 	case CodeInvalidRequest, CodeValidationError:
 		return http.StatusBadRequest, true
+	case CodeAIOutputInvalid:
+		return http.StatusUnprocessableEntity, true
 	case CodeUnauthorized:
 		return http.StatusUnauthorized, true
 	case CodeForbidden, CodeSegregationOfDutiesViolation:
@@ -98,6 +101,8 @@ func statusForCode(code ErrorCode) (int, bool) {
 
 func defaultMessage(code ErrorCode) string {
 	switch code {
+	case CodeAIOutputInvalid:
+		return "The AI analysis output failed structured validation."
 	case CodeInvalidRequest:
 		return "Invalid request."
 	case CodeUnauthorized:

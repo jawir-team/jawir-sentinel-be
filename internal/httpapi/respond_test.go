@@ -18,6 +18,7 @@ func TestWriteErrorPublicMapping(t *testing.T) {
 		code   httpapi.ErrorCode
 		status int
 	}{
+		{"ai output invalid", httpapi.CodeAIOutputInvalid, http.StatusUnprocessableEntity},
 		{"invalid request", httpapi.CodeInvalidRequest, http.StatusBadRequest},
 		{"unauthorized", httpapi.CodeUnauthorized, http.StatusUnauthorized},
 		{"forbidden", httpapi.CodeForbidden, http.StatusForbidden},
