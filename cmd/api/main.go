@@ -120,6 +120,9 @@ func newServerWithStores(
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/submit", handler.SubmitCase(submitCaseStore))
 	closeCaseStore, _ := caseParticipantStore.(handler.CloseCaseStore)
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/close", handler.CloseCase(closeCaseStore))
+	evidenceStore, _ := caseParticipantStore.(handler.EvidenceStore)
+	protected.With(auth.RequireAuth).Get("/v1/cases/{id}/evidences", handler.ListCaseEvidences(evidenceStore))
+	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/evidences", handler.AddCaseEvidence(evidenceStore))
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/participants", handler.AssignCaseParticipant(caseParticipantStore))
 	protected.With(auth.RequireAuth).Delete("/v1/cases/{id}/participants/{participant_id}", handler.UnassignCaseParticipant(caseParticipantStore))
 	var userStore handler.UserStore
