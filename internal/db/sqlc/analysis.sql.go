@@ -180,3 +180,312 @@ func (q *Queries) UpdateAnalysisResult(ctx context.Context, arg UpdateAnalysisRe
 	)
 	return i, err
 }
+
+// Hand-written (BE-031): sqlc generation requires network access that is not
+// available in the implementation environment. Keep this block in sync with
+// db/queries/analysis.sql until the next successful `make sqlc` run.
+
+const lockAnalysisVersionSeq = `-- name: LockAnalysisVersionSeq :exec
+SELECT pg_advisory_xact_lock(
+    hashtext('ai_analysis_version:' || $1::uuid::text)
+)`
+
+func (q *Queries) LockAnalysisVersionSeq(ctx context.Context, caseID pgtype.UUID) error {
+	_, err := q.dbx.Exec(ctx, lockAnalysisVersionSeq, caseID)
+	return err
+}
+
+const maxAnalysisVersion = `-- name: MaxAnalysisVersion :one
+SELECT COALESCE(MAX(version), 0)::integer
+FROM ai_analyses
+WHERE case_id = $1`
+
+func (q *Queries) MaxAnalysisVersion(ctx context.Context, caseID pgtype.UUID) (int32, error) {
+	row := q.dbx.QueryRow(ctx, maxAnalysisVersion, caseID)
+	var maxVersion int32
+	err := row.Scan(&maxVersion)
+	return maxVersion, err
+}
+
+const createGeneratingAnalysis = `-- name: CreateGeneratingAnalysis :one
+INSERT INTO ai_analyses (
+    id, case_id, version, status, technical_retry_count,
+    worker_attempt_id, worker_started_at,
+    summary, facts, assumptions, unknowns, risk_analysis,
+    compliance_analysis, recommendation, alternatives, missing_information,
+    policy_status, evidence_quality, uncertainty,
+    verification_status, verification_notes,
+    model_name, prompt_version
+)
+VALUES (
+    $1, $2, $3, 'GENERATING', 0,
+    $4, now(),
+    NULL, NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL,
+    NULL, NULL,
+    $5, $6
+)
+RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id,
+          worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
+          compliance_analysis, recommendation, alternatives, missing_information,
+          policy_status, evidence_quality, uncertainty, verification_status,
+          verification_notes, model_name, prompt_version, created_at`
+
+type CreateGeneratingAnalysisParams struct {
+	ID              pgtype.UUID
+	CaseID          pgtype.UUID
+	Version         int32
+	WorkerAttemptID pgtype.UUID
+	ModelName       string
+	PromptVersion   string
+}
+
+func (q *Queries) CreateGeneratingAnalysis(ctx context.Context, arg CreateGeneratingAnalysisParams) (AiAnalysis, error) {
+	row := q.dbx.QueryRow(ctx, createGeneratingAnalysis,
+		arg.ID, arg.CaseID, arg.Version, arg.WorkerAttemptID, arg.ModelName, arg.PromptVersion,
+	)
+	var i AiAnalysis
+	err := row.Scan(
+		&i.ID, &i.CaseID, &i.Version, &i.Status, &i.TechnicalRetryCount, &i.WorkerAttemptID,
+		&i.WorkerStartedAt, &i.Summary, &i.Facts, &i.Assumptions, &i.Unknowns, &i.RiskAnalysis,
+		&i.ComplianceAnalysis, &i.Recommendation, &i.Alternatives, &i.MissingInformation,
+		&i.PolicyStatus, &i.EvidenceQuality, &i.Uncertainty, &i.VerificationStatus,
+		&i.VerificationNotes, &i.ModelName, &i.PromptVersion, &i.CreatedAt,
+	)
+	return i, err
+}
+
+const reclaimGeneratingAnalysis = `-- name: ReclaimGeneratingAnalysis :one
+UPDATE ai_analyses
+SET worker_attempt_id = $2, worker_started_at = now()
+WHERE id = $1 AND status = 'GENERATING'
+RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id,
+          worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
+          compliance_analysis, recommendation, alternatives, missing_information,
+          policy_status, evidence_quality, uncertainty, verification_status,
+          verification_notes, model_name, prompt_version, created_at`
+
+type ReclaimGeneratingAnalysisParams struct {
+	ID              pgtype.UUID
+	WorkerAttemptID pgtype.UUID
+}
+
+func (q *Queries) ReclaimGeneratingAnalysis(ctx context.Context, arg ReclaimGeneratingAnalysisParams) (AiAnalysis, error) {
+	row := q.dbx.QueryRow(ctx, reclaimGeneratingAnalysis, arg.ID, arg.WorkerAttemptID)
+	var i AiAnalysis
+	err := row.Scan(
+		&i.ID, &i.CaseID, &i.Version, &i.Status, &i.TechnicalRetryCount, &i.WorkerAttemptID,
+		&i.WorkerStartedAt, &i.Summary, &i.Facts, &i.Assumptions, &i.Unknowns, &i.RiskAnalysis,
+		&i.ComplianceAnalysis, &i.Recommendation, &i.Alternatives, &i.MissingInformation,
+		&i.PolicyStatus, &i.EvidenceQuality, &i.Uncertainty, &i.VerificationStatus,
+		&i.VerificationNotes, &i.ModelName, &i.PromptVersion, &i.CreatedAt,
+	)
+	return i, err
+}
+
+const bumpTechnicalRetry = `-- name: BumpTechnicalRetry :one
+UPDATE ai_analyses
+SET technical_retry_count = technical_retry_count + 1,
+    worker_attempt_id = $3,
+    worker_started_at = now()
+WHERE id = $1
+  AND status = 'GENERATING'
+  AND worker_attempt_id = $2
+RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id,
+          worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
+          compliance_analysis, recommendation, alternatives, missing_information,
+          policy_status, evidence_quality, uncertainty, verification_status,
+          verification_notes, model_name, prompt_version, created_at`
+
+type BumpTechnicalRetryParams struct {
+	ID                     pgtype.UUID
+	CurrentWorkerAttemptID pgtype.UUID
+	NewWorkerAttemptID     pgtype.UUID
+}
+
+func (q *Queries) BumpTechnicalRetry(ctx context.Context, arg BumpTechnicalRetryParams) (AiAnalysis, error) {
+	row := q.dbx.QueryRow(ctx, bumpTechnicalRetry, arg.ID, arg.CurrentWorkerAttemptID, arg.NewWorkerAttemptID)
+	var i AiAnalysis
+	err := row.Scan(
+		&i.ID, &i.CaseID, &i.Version, &i.Status, &i.TechnicalRetryCount, &i.WorkerAttemptID,
+		&i.WorkerStartedAt, &i.Summary, &i.Facts, &i.Assumptions, &i.Unknowns, &i.RiskAnalysis,
+		&i.ComplianceAnalysis, &i.Recommendation, &i.Alternatives, &i.MissingInformation,
+		&i.PolicyStatus, &i.EvidenceQuality, &i.Uncertainty, &i.VerificationStatus,
+		&i.VerificationNotes, &i.ModelName, &i.PromptVersion, &i.CreatedAt,
+	)
+	return i, err
+}
+
+const finalizeAnalysis = `-- name: FinalizeAnalysis :one
+UPDATE ai_analyses
+SET status = $3,
+    summary = $4,
+    facts = $5,
+    assumptions = $6,
+    unknowns = $7,
+    risk_analysis = $8,
+    compliance_analysis = $9,
+    recommendation = $10,
+    alternatives = $11,
+    missing_information = $12,
+    policy_status = $13,
+    evidence_quality = $14,
+    uncertainty = $15,
+    verification_status = $16,
+    verification_notes = $17
+WHERE id = $1
+  AND status = 'GENERATING'
+  AND worker_attempt_id = $2
+RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id,
+          worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
+          compliance_analysis, recommendation, alternatives, missing_information,
+          policy_status, evidence_quality, uncertainty, verification_status,
+          verification_notes, model_name, prompt_version, created_at`
+
+type FinalizeAnalysisParams struct {
+	ID                 pgtype.UUID
+	WorkerAttemptID    pgtype.UUID
+	Status             string
+	Summary            pgtype.Text
+	Facts              []byte
+	Assumptions        []byte
+	Unknowns           []byte
+	RiskAnalysis       []byte
+	ComplianceAnalysis []byte
+	Recommendation     []byte
+	Alternatives       []byte
+	MissingInformation []byte
+	PolicyStatus       pgtype.Text
+	EvidenceQuality    pgtype.Text
+	Uncertainty        pgtype.Text
+	VerificationStatus pgtype.Text
+	VerificationNotes  []byte
+}
+
+func (q *Queries) FinalizeAnalysis(ctx context.Context, arg FinalizeAnalysisParams) (AiAnalysis, error) {
+	row := q.dbx.QueryRow(ctx, finalizeAnalysis,
+		arg.ID,
+		arg.WorkerAttemptID,
+		arg.Status,
+		arg.Summary,
+		arg.Facts,
+		arg.Assumptions,
+		arg.Unknowns,
+		arg.RiskAnalysis,
+		arg.ComplianceAnalysis,
+		arg.Recommendation,
+		arg.Alternatives,
+		arg.MissingInformation,
+		arg.PolicyStatus,
+		arg.EvidenceQuality,
+		arg.Uncertainty,
+		arg.VerificationStatus,
+		arg.VerificationNotes,
+	)
+	var i AiAnalysis
+	err := row.Scan(
+		&i.ID, &i.CaseID, &i.Version, &i.Status, &i.TechnicalRetryCount, &i.WorkerAttemptID,
+		&i.WorkerStartedAt, &i.Summary, &i.Facts, &i.Assumptions, &i.Unknowns, &i.RiskAnalysis,
+		&i.ComplianceAnalysis, &i.Recommendation, &i.Alternatives, &i.MissingInformation,
+		&i.PolicyStatus, &i.EvidenceQuality, &i.Uncertainty, &i.VerificationStatus,
+		&i.VerificationNotes, &i.ModelName, &i.PromptVersion, &i.CreatedAt,
+	)
+	return i, err
+}
+
+const lockCaseForAnalysis = `-- name: LockCaseForAnalysis :one
+SELECT id
+FROM cases
+WHERE id = $1
+FOR UPDATE`
+
+func (q *Queries) LockCaseForAnalysis(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.dbx.QueryRow(ctx, lockCaseForAnalysis, id)
+	var caseID pgtype.UUID
+	err := row.Scan(&caseID)
+	return caseID, err
+}
+
+const setCaseCurrentAnalysis = `-- name: SetCaseCurrentAnalysis :exec
+UPDATE cases AS c
+SET current_analysis_id = $2, updated_at = now()
+WHERE c.id = $1
+  AND EXISTS (
+      SELECT 1
+      FROM ai_analyses AS a
+      WHERE a.id = $2 AND a.case_id = c.id AND a.status = 'COMPLETED'
+  )`
+
+type SetCaseCurrentAnalysisParams struct {
+	ID                pgtype.UUID
+	CurrentAnalysisID pgtype.UUID
+}
+
+func (q *Queries) SetCaseCurrentAnalysis(ctx context.Context, arg SetCaseCurrentAnalysisParams) error {
+	_, err := q.dbx.Exec(ctx, setCaseCurrentAnalysis, arg.ID, arg.CurrentAnalysisID)
+	return err
+}
+
+const listAnalysisHistory = `-- name: ListAnalysisHistory :many
+SELECT id, case_id, version, status, technical_retry_count, worker_attempt_id,
+       worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
+       compliance_analysis, recommendation, alternatives, missing_information,
+       policy_status, evidence_quality, uncertainty, verification_status,
+       verification_notes, model_name, prompt_version, created_at
+FROM ai_analyses
+WHERE case_id = $1
+ORDER BY version DESC`
+
+func (q *Queries) ListAnalysisHistory(ctx context.Context, caseID pgtype.UUID) ([]AiAnalysis, error) {
+	rows, err := q.dbx.Query(ctx, listAnalysisHistory, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AiAnalysis
+	for rows.Next() {
+		var i AiAnalysis
+		if err := rows.Scan(
+			&i.ID, &i.CaseID, &i.Version, &i.Status, &i.TechnicalRetryCount, &i.WorkerAttemptID,
+			&i.WorkerStartedAt, &i.Summary, &i.Facts, &i.Assumptions, &i.Unknowns, &i.RiskAnalysis,
+			&i.ComplianceAnalysis, &i.Recommendation, &i.Alternatives, &i.MissingInformation,
+			&i.PolicyStatus, &i.EvidenceQuality, &i.Uncertainty, &i.VerificationStatus,
+			&i.VerificationNotes, &i.ModelName, &i.PromptVersion, &i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getCurrentAnalysis = `-- name: GetCurrentAnalysis :one
+SELECT a.id, a.case_id, a.version, a.status, a.technical_retry_count,
+       a.worker_attempt_id, a.worker_started_at, a.summary, a.facts,
+       a.assumptions, a.unknowns, a.risk_analysis, a.compliance_analysis,
+       a.recommendation, a.alternatives, a.missing_information,
+       a.policy_status, a.evidence_quality, a.uncertainty,
+       a.verification_status, a.verification_notes, a.model_name,
+       a.prompt_version, a.created_at
+FROM cases c
+JOIN ai_analyses a ON a.id = c.current_analysis_id
+WHERE c.id = $1`
+
+func (q *Queries) GetCurrentAnalysis(ctx context.Context, caseID pgtype.UUID) (AiAnalysis, error) {
+	row := q.dbx.QueryRow(ctx, getCurrentAnalysis, caseID)
+	var i AiAnalysis
+	err := row.Scan(
+		&i.ID, &i.CaseID, &i.Version, &i.Status, &i.TechnicalRetryCount, &i.WorkerAttemptID,
+		&i.WorkerStartedAt, &i.Summary, &i.Facts, &i.Assumptions, &i.Unknowns, &i.RiskAnalysis,
+		&i.ComplianceAnalysis, &i.Recommendation, &i.Alternatives, &i.MissingInformation,
+		&i.PolicyStatus, &i.EvidenceQuality, &i.Uncertainty, &i.VerificationStatus,
+		&i.VerificationNotes, &i.ModelName, &i.PromptVersion, &i.CreatedAt,
+	)
+	return i, err
+}
+
+// End hand-written (BE-031).
