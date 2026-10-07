@@ -11,6 +11,8 @@ import (
 type Querier interface {
 	AppendCaseAuditEvent(context.Context, AppendCaseAuditEventParams) (AuditEvent, error)
 	AppendPolicyAuditEvent(context.Context, AppendPolicyAuditEventParams) (AuditEvent, error)
+	// Hand-written (BE-033).
+	ClaimAnalysis(context.Context, ClaimAnalysisParams) (AiAnalysis, error)
 	ClaimPolicyVersionIndex(context.Context, ClaimPolicyVersionIndexParams) (PolicyVersion, error)
 	CloseCase(context.Context, CloseCaseParams) (Case, error)
 	CompletePolicyVersionIndex(context.Context, CompletePolicyVersionIndexParams) (PolicyVersion, error)
@@ -56,6 +58,8 @@ type Querier interface {
 	GetUserByFirebaseUID(context.Context, string) (User, error)
 	GetUserForUpdate(context.Context, pgtype.UUID) (User, error)
 	IsActiveCaseParticipant(context.Context, IsActiveCaseParticipantParams) (bool, error)
+	// Hand-written (BE-033).
+	IsAnalysisClaimActive(context.Context, IsAnalysisClaimActiveParams) (bool, error)
 	// Hand-written (BE-032).
 	ListAnalysisEvidenceRefs(context.Context, pgtype.UUID) ([]AnalysisEvidenceRef, error)
 	// Hand-written (BE-032).

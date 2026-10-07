@@ -258,7 +258,7 @@ func (q *Queries) CreateGeneratingAnalysis(ctx context.Context, arg CreateGenera
 
 const reclaimGeneratingAnalysis = `-- name: ReclaimGeneratingAnalysis :one
 UPDATE ai_analyses
-SET worker_attempt_id = $2, worker_started_at = now()
+SET worker_attempt_id = $2, worker_started_at = clock_timestamp()
 WHERE id = $1 AND status = 'GENERATING'
 RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id,
           worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
@@ -284,11 +284,62 @@ func (q *Queries) ReclaimGeneratingAnalysis(ctx context.Context, arg ReclaimGene
 	return i, err
 }
 
+const claimAnalysis = `-- name: ClaimAnalysis :one
+UPDATE ai_analyses
+SET worker_attempt_id = $2, worker_started_at = clock_timestamp()
+WHERE id = $1
+  AND case_id = $3
+  AND status = 'GENERATING'
+RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id,
+          worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
+          compliance_analysis, recommendation, alternatives, missing_information,
+          policy_status, evidence_quality, uncertainty, verification_status,
+          verification_notes, model_name, prompt_version, created_at`
+
+type ClaimAnalysisParams struct {
+	ID              pgtype.UUID
+	WorkerAttemptID pgtype.UUID
+	CaseID          pgtype.UUID
+}
+
+func (q *Queries) ClaimAnalysis(ctx context.Context, arg ClaimAnalysisParams) (AiAnalysis, error) {
+	row := q.dbx.QueryRow(ctx, claimAnalysis, arg.ID, arg.WorkerAttemptID, arg.CaseID)
+	var i AiAnalysis
+	err := row.Scan(
+		&i.ID, &i.CaseID, &i.Version, &i.Status, &i.TechnicalRetryCount, &i.WorkerAttemptID,
+		&i.WorkerStartedAt, &i.Summary, &i.Facts, &i.Assumptions, &i.Unknowns, &i.RiskAnalysis,
+		&i.ComplianceAnalysis, &i.Recommendation, &i.Alternatives, &i.MissingInformation,
+		&i.PolicyStatus, &i.EvidenceQuality, &i.Uncertainty, &i.VerificationStatus,
+		&i.VerificationNotes, &i.ModelName, &i.PromptVersion, &i.CreatedAt,
+	)
+	return i, err
+}
+
+const isAnalysisClaimActive = `-- name: IsAnalysisClaimActive :one
+SELECT worker_attempt_id IS NOT NULL
+       AND worker_started_at IS NOT NULL
+       AND worker_started_at > clock_timestamp()
+           - make_interval(secs => $2::double precision)
+FROM ai_analyses
+WHERE id = $1`
+
+type IsAnalysisClaimActiveParams struct {
+	ID           pgtype.UUID
+	LeaseSeconds float64
+}
+
+func (q *Queries) IsAnalysisClaimActive(ctx context.Context, arg IsAnalysisClaimActiveParams) (bool, error) {
+	row := q.dbx.QueryRow(ctx, isAnalysisClaimActive, arg.ID, arg.LeaseSeconds)
+	var active bool
+	err := row.Scan(&active)
+	return active, err
+}
+
 const bumpTechnicalRetry = `-- name: BumpTechnicalRetry :one
 UPDATE ai_analyses
 SET technical_retry_count = technical_retry_count + 1,
     worker_attempt_id = $3,
-    worker_started_at = now()
+    worker_started_at = clock_timestamp()
 WHERE id = $1
   AND status = 'GENERATING'
   AND worker_attempt_id = $2

@@ -91,7 +91,7 @@ RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id
 
 -- name: ReclaimGeneratingAnalysis :one
 UPDATE ai_analyses
-SET worker_attempt_id = $2, worker_started_at = now()
+SET worker_attempt_id = $2, worker_started_at = clock_timestamp()
 WHERE id = $1 AND status = 'GENERATING'
 RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id,
           worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
@@ -99,11 +99,31 @@ RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id
           policy_status, evidence_quality, uncertainty, verification_status,
           verification_notes, model_name, prompt_version, created_at;
 
+-- name: ClaimAnalysis :one
+UPDATE ai_analyses
+SET worker_attempt_id = sqlc.arg(worker_attempt_id), worker_started_at = clock_timestamp()
+WHERE id = sqlc.arg(id)
+  AND case_id = sqlc.arg(case_id)
+  AND status = 'GENERATING'
+RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id,
+          worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
+          compliance_analysis, recommendation, alternatives, missing_information,
+          policy_status, evidence_quality, uncertainty, verification_status,
+          verification_notes, model_name, prompt_version, created_at;
+
+-- name: IsAnalysisClaimActive :one
+SELECT worker_attempt_id IS NOT NULL
+       AND worker_started_at IS NOT NULL
+       AND worker_started_at > clock_timestamp()
+           - make_interval(secs => sqlc.arg(lease_seconds)::double precision)
+FROM ai_analyses
+WHERE id = sqlc.arg(id);
+
 -- name: BumpTechnicalRetry :one
 UPDATE ai_analyses
 SET technical_retry_count = technical_retry_count + 1,
     worker_attempt_id = $3,
-    worker_started_at = now()
+    worker_started_at = clock_timestamp()
 WHERE id = $1
   AND status = 'GENERATING'
   AND worker_attempt_id = $2
