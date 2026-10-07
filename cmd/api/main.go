@@ -16,6 +16,7 @@ import (
 	"github.com/jawir-team/jawir-sentinel-be/internal/handler"
 	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
 	"github.com/jawir-team/jawir-sentinel-be/internal/logging"
+	"github.com/jawir-team/jawir-sentinel-be/internal/storage"
 )
 
 func main() {
@@ -40,7 +41,8 @@ func run() error {
 	}
 	queries := db.New(pool)
 	txStore := handler.NewTxQueries(pool)
-	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries, queries, txStore, txStore, queries, queries)
+	fileStorage := storage.NewFromEnv()
+	server, err := newServerWithStores(auth.NewVerifier(), queries, queries, queries, queries, txStore, txStore, queries, fileStorage, queries)
 	if err != nil {
 		return err
 	}
@@ -60,7 +62,7 @@ func newServerWithAuth(verifier auth.TokenVerifier, users auth.UserStore) (*http
 	caseParticipantStore, _ := users.(handler.CaseParticipantStore)
 	userAPI, _ := users.(handler.UserStore)
 	policyVersions, _ := users.(handler.PolicyVersionStore)
-	return newServerWithStores(verifier, users, meUnits, units, caseTypes, caseStore, caseParticipantStore, policyVersions, userAPI)
+	return newServerWithStores(verifier, users, meUnits, units, caseTypes, caseStore, caseParticipantStore, policyVersions, nil, userAPI)
 }
 
 func newServerWithStores(
@@ -72,6 +74,7 @@ func newServerWithStores(
 	caseStore handler.CaseStore,
 	caseParticipantStore handler.CaseParticipantStore,
 	policyVersionStore handler.PolicyVersionStore,
+	fileStorage storage.Store,
 	userStores ...handler.UserStore,
 ) (*http.Server, error) {
 	port := os.Getenv("APP_PORT")
@@ -123,6 +126,8 @@ func newServerWithStores(
 	evidenceStore, _ := caseParticipantStore.(handler.EvidenceStore)
 	protected.With(auth.RequireAuth).Get("/v1/cases/{id}/evidences", handler.ListCaseEvidences(evidenceStore))
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/evidences", handler.AddCaseEvidence(evidenceStore))
+	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/evidences/upload-url", handler.IssueEvidenceUploadURL(evidenceStore, fileStorage))
+	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/evidences/file", handler.RegisterFileEvidence(evidenceStore, fileStorage))
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/participants", handler.AssignCaseParticipant(caseParticipantStore))
 	protected.With(auth.RequireAuth).Delete("/v1/cases/{id}/participants/{participant_id}", handler.UnassignCaseParticipant(caseParticipantStore))
 	var userStore handler.UserStore

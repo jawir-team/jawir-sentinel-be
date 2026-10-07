@@ -139,20 +139,9 @@ func runAddCaseEvidence(
 		return caseEvidenceResponse{}, participantInternalError(errors.New("evidence transaction queries are not configured"))
 	}
 
-	stored, err := q.GetCase(ctx, caseID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return caseEvidenceResponse{}, participantAPIError(httpapi.CodeCaseNotFound, "", nil)
-	}
-	if err != nil {
-		return caseEvidenceResponse{}, participantInternalError(err)
-	}
-	participants, err := q.ListCaseParticipants(ctx, caseID)
-	if err != nil {
-		return caseEvidenceResponse{}, participantInternalError(err)
-	}
-	sourceType, assigned := activeEvidenceActorRole(participants, actor.ID)
-	if !assigned || !canAddEvidence(workflow.State(stored.Status), sourceType) {
-		return caseEvidenceResponse{}, participantAPIError(httpapi.CodeForbidden, "", nil)
+	sourceType, apiErr := authorizeEvidenceWrite(ctx, q, caseID, actor)
+	if apiErr != nil {
+		return caseEvidenceResponse{}, apiErr
 	}
 
 	evidenceID, err := newUnitUUID()
