@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	checkerDecisionApprove = "APPROVE"
-	checkerDecisionReject  = "REJECT"
-	checkerEventApproved   = "CHECKER_APPROVED"
-	checkerEventRejected   = "CHECKER_REJECTED"
+	checkerDecisionApprove       = "APPROVE"
+	checkerDecisionReject        = "REJECT"
+	checkerEventApproved         = "CHECKER_APPROVED"
+	checkerEventRejected         = "CHECKER_REJECTED"
+	reviewerFeedbackEvidenceType = "REVIEWER_FEEDBACK"
 )
 
 // CheckerDecisionTxQueries is the database boundary for recording a checker
@@ -34,6 +35,7 @@ type CheckerDecisionTxQueries interface {
 	ListDecisionsByAnalysis(context.Context, pgtype.UUID) ([]db.Decision, error)
 	ListCaseEvidences(context.Context, pgtype.UUID) ([]db.CaseEvidence, error)
 	CreateDecision(context.Context, db.CreateDecisionParams) (db.Decision, error)
+	CreateEvidence(context.Context, db.CreateEvidenceParams) (db.CaseEvidence, error)
 	AppendCaseAuditEvent(context.Context, db.AppendCaseAuditEventParams) (db.AuditEvent, error)
 	UpdateCaseStatus(context.Context, db.UpdateCaseStatusParams) (db.Case, error)
 }
@@ -187,6 +189,9 @@ func recordCheckerApproval(
 		if apiErr != nil {
 			return apiErr
 		}
+		if apiErr = appendCheckerDecisionAudit(ctx, q, caseID, actor, request, nil); apiErr != nil {
+			return apiErr
+		}
 
 		*caseStatus = stored.Status
 		if allRequiredCheckersApproved(request.analysisID, participants, append(decisions, *decision)) {
@@ -241,6 +246,13 @@ func recordCheckerRejection(
 		q := checkerDecisionQueries(tx)
 		_, _, _, created, apiErr := persistCheckerDecision(ctx, q, caseID, actor, request)
 		if apiErr != nil {
+			return apiErr
+		}
+		feedback, apiErr := persistReviewerFeedbackEvidence(ctx, q, caseID, actor, request)
+		if apiErr != nil {
+			return apiErr
+		}
+		if apiErr = appendCheckerDecisionAudit(ctx, q, caseID, actor, request, &feedback.ID); apiErr != nil {
 			return apiErr
 		}
 		*decision = created
@@ -358,29 +370,87 @@ func persistCheckerDecision(
 		return db.Case{}, nil, nil, db.Decision{}, participantInternalError(err)
 	}
 
+	return stored, participants, decisions, created, nil
+}
+
+func persistReviewerFeedbackEvidence(
+	ctx context.Context,
+	q CheckerDecisionTxQueries,
+	caseID pgtype.UUID,
+	actor auth.User,
+	request parsedCheckerDecision,
+) (db.CaseEvidence, *httpapi.APIError) {
+	evidenceID, err := newUnitUUID()
+	if err != nil {
+		return db.CaseEvidence{}, participantInternalError(err)
+	}
+	content := "Reason: " + request.reason
+	if request.comment != "" {
+		content += "\nComment: " + request.comment
+	}
+	if len(request.evidenceIDs) > 0 {
+		citedEvidenceIDs := make([]string, 0, len(request.evidenceIDs))
+		for _, id := range request.evidenceIDs {
+			citedEvidenceIDs = append(citedEvidenceIDs, id.String())
+		}
+		content += "\nCited evidence: " + strings.Join(citedEvidenceIDs, ", ")
+	}
+
+	created, err := q.CreateEvidence(ctx, db.CreateEvidenceParams{
+		ID:           evidenceID,
+		CaseID:       caseID,
+		SourceType:   caseRoleChecker,
+		SourceUserID: actor.ID,
+		EvidenceType: reviewerFeedbackEvidenceType,
+		Title:        pgtype.Text{String: "Checker rejection feedback", Valid: true},
+		Content:      pgtype.Text{String: content, Valid: true},
+		FilePath:     pgtype.Text{},
+		MimeType:     pgtype.Text{},
+	})
+	if err != nil {
+		return db.CaseEvidence{}, participantInternalError(err)
+	}
+	return created, nil
+}
+
+func appendCheckerDecisionAudit(
+	ctx context.Context,
+	q CheckerDecisionTxQueries,
+	caseID pgtype.UUID,
+	actor auth.User,
+	request parsedCheckerDecision,
+	feedbackEvidenceID *pgtype.UUID,
+) *httpapi.APIError {
 	metadataEvidenceIDs := make([]string, 0, len(request.evidenceIDs))
 	for _, id := range request.evidenceIDs {
 		metadataEvidenceIDs = append(metadataEvidenceIDs, id.String())
 	}
+	var metadataFeedbackEvidenceID *string
+	if feedbackEvidenceID != nil {
+		value := feedbackEvidenceID.String()
+		metadataFeedbackEvidenceID = &value
+	}
 	metadata, err := json.Marshal(struct {
-		AnalysisID  string   `json:"analysis_id"`
-		Decision    string   `json:"decision"`
-		Reason      string   `json:"reason"`
-		Comment     string   `json:"comment"`
-		EvidenceIDs []string `json:"evidence_ids"`
+		AnalysisID         string   `json:"analysis_id"`
+		Decision           string   `json:"decision"`
+		Reason             string   `json:"reason"`
+		Comment            string   `json:"comment"`
+		EvidenceIDs        []string `json:"evidence_ids"`
+		FeedbackEvidenceID *string  `json:"feedback_evidence_id,omitempty"`
 	}{
-		AnalysisID:  request.analysisID.String(),
-		Decision:    request.decision,
-		Reason:      request.reason,
-		Comment:     request.comment,
-		EvidenceIDs: metadataEvidenceIDs,
+		AnalysisID:         request.analysisID.String(),
+		Decision:           request.decision,
+		Reason:             request.reason,
+		Comment:            request.comment,
+		EvidenceIDs:        metadataEvidenceIDs,
+		FeedbackEvidenceID: metadataFeedbackEvidenceID,
 	})
 	if err != nil {
-		return db.Case{}, nil, nil, db.Decision{}, participantInternalError(err)
+		return participantInternalError(err)
 	}
 	auditID, err := newUnitUUID()
 	if err != nil {
-		return db.Case{}, nil, nil, db.Decision{}, participantInternalError(err)
+		return participantInternalError(err)
 	}
 	eventType := checkerEventApproved
 	if request.decision == checkerDecisionReject {
@@ -395,9 +465,9 @@ func persistCheckerDecision(
 		AnalysisID: request.analysisID,
 		Metadata:   metadata,
 	}); err != nil {
-		return db.Case{}, nil, nil, db.Decision{}, participantInternalError(err)
+		return participantInternalError(err)
 	}
-	return stored, participants, decisions, created, nil
+	return nil
 }
 
 func nullableCheckerText(value string) pgtype.Text {

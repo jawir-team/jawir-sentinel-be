@@ -25,14 +25,18 @@ type fakeCheckerDecisionQueries struct {
 	participants []db.CaseParticipant
 	decisions    []db.Decision
 	evidences    []db.CaseEvidence
+	order        []string
 
-	createArg   db.CreateDecisionParams
-	createErr   error
-	createCalls int
-	auditArg    db.AppendCaseAuditEventParams
-	auditCalls  int
-	updateArg   db.UpdateCaseStatusParams
-	updateCalls int
+	createArg     db.CreateDecisionParams
+	createErr     error
+	createCalls   int
+	evidenceArg   db.CreateEvidenceParams
+	evidenceErr   error
+	evidenceCalls int
+	auditArg      db.AppendCaseAuditEventParams
+	auditCalls    int
+	updateArg     db.UpdateCaseStatusParams
+	updateCalls   int
 }
 
 var (
@@ -59,6 +63,7 @@ func (f *fakeCheckerDecisionQueries) ListCaseEvidences(context.Context, pgtype.U
 func (f *fakeCheckerDecisionQueries) CreateDecision(_ context.Context, arg db.CreateDecisionParams) (db.Decision, error) {
 	f.createCalls++
 	f.createArg = arg
+	f.order = append(f.order, "decision")
 	if f.createErr != nil {
 		return db.Decision{}, f.createErr
 	}
@@ -69,15 +74,31 @@ func (f *fakeCheckerDecisionQueries) CreateDecision(_ context.Context, arg db.Cr
 	}, nil
 }
 
+func (f *fakeCheckerDecisionQueries) CreateEvidence(_ context.Context, arg db.CreateEvidenceParams) (db.CaseEvidence, error) {
+	f.evidenceCalls++
+	f.evidenceArg = arg
+	f.order = append(f.order, "evidence")
+	if f.evidenceErr != nil {
+		return db.CaseEvidence{}, f.evidenceErr
+	}
+	return db.CaseEvidence{
+		ID: arg.ID, CaseID: arg.CaseID, SourceType: arg.SourceType,
+		SourceUserID: arg.SourceUserID, EvidenceType: arg.EvidenceType,
+		Title: arg.Title, Content: arg.Content, FilePath: arg.FilePath, MimeType: arg.MimeType,
+	}, nil
+}
+
 func (f *fakeCheckerDecisionQueries) AppendCaseAuditEvent(_ context.Context, arg db.AppendCaseAuditEventParams) (db.AuditEvent, error) {
 	f.auditCalls++
 	f.auditArg = arg
+	f.order = append(f.order, "audit")
 	return db.AuditEvent{}, nil
 }
 
 func (f *fakeCheckerDecisionQueries) UpdateCaseStatus(_ context.Context, arg db.UpdateCaseStatusParams) (db.Case, error) {
 	f.updateCalls++
 	f.updateArg = arg
+	f.order = append(f.order, "status")
 	updated := f.caseResult
 	updated.Status = arg.Status
 	return updated, nil
@@ -115,6 +136,7 @@ type fakeCheckerReanalysis struct {
 	outcome reanalysis.Outcome
 	calls   int
 	request reanalysis.Request
+	result  reanalysis.Result
 }
 
 var _ handler.ReanalysisOrchestrator = (*fakeCheckerReanalysis)(nil)
@@ -134,7 +156,8 @@ func (f *fakeCheckerReanalysis) Run(ctx context.Context, request reanalysis.Requ
 	default:
 		return reanalysis.Result{}, fmt.Errorf("unexpected fake outcome %q", f.outcome)
 	}
-	return reanalysis.Result{Outcome: f.outcome, Case: resultCase}, nil
+	f.result = reanalysis.Result{Outcome: f.outcome, Case: resultCase}
+	return f.result, nil
 }
 
 func checkerDecisionFixture(actor auth.User) *fakeCheckerDecisionQueries {
@@ -207,6 +230,16 @@ func TestRecordCheckerDecisionApproveKeepsCheckingUntilAllRequiredApprove(t *tes
 	}
 	if queries.auditArg.EventType != "CHECKER_APPROVED" || queries.auditArg.AnalysisID != queries.caseResult.CurrentAnalysisID {
 		t.Errorf("audit = %+v, want CHECKER_APPROVED for current analysis", queries.auditArg)
+	}
+	if queries.evidenceCalls != 0 {
+		t.Errorf("feedback evidence calls = %d, want 0 for approval", queries.evidenceCalls)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(queries.auditArg.Metadata, &metadata); err != nil {
+		t.Fatalf("decode approval audit metadata: %v", err)
+	}
+	if _, exists := metadata["feedback_evidence_id"]; exists {
+		t.Errorf("approval audit metadata = %s, must not contain feedback_evidence_id", queries.auditArg.Metadata)
 	}
 }
 
@@ -288,17 +321,18 @@ func TestRecordCheckerDecisionLateApprovalRejectedRoundDoesNotTransition(t *test
 		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"APPROVE"}`)
 
 	assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeConflict)
-	if queries.createCalls != 0 || queries.auditCalls != 0 || queries.updateCalls != 0 {
-		t.Errorf("mutation calls = create %d audit %d update %d, want all zero", queries.createCalls, queries.auditCalls, queries.updateCalls)
+	if queries.createCalls != 0 || queries.evidenceCalls != 0 || queries.auditCalls != 0 || queries.updateCalls != 0 {
+		t.Errorf("mutation calls = create %d evidence %d audit %d update %d, want all zero", queries.createCalls, queries.evidenceCalls, queries.auditCalls, queries.updateCalls)
 	}
 }
 
 func TestRecordCheckerDecisionRejectQueuesReanalysis(t *testing.T) {
 	actor := caseTestUser(auth.SystemRoleUser)
 	queries := checkerDecisionFixture(actor)
+	queries.evidences = append(queries.evidences, db.CaseEvidence{ID: handlerTestUUID(7), CaseID: queries.caseResult.ID})
 
 	response, store, orchestrator := serveCheckerDecision(actor, queries, reanalysis.Queued,
-		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"REJECT","reason":" Missing SOP ","evidence_ids":["00000000-0000-0000-0000-000000000006"]}`)
+		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"REJECT","reason":" Missing SOP ","comment":" Recheck the controls ","evidence_ids":["00000000-0000-0000-0000-000000000006","00000000-0000-0000-0000-000000000007"]}`)
 
 	assertCheckerDecisionSuccess(t, response, "REJECT", "AI_ANALYSIS")
 	if store.calls != 0 || orchestrator.calls != 1 {
@@ -310,8 +344,37 @@ func TestRecordCheckerDecisionRejectQueuesReanalysis(t *testing.T) {
 	if queries.createCalls != 1 || !queries.createArg.Reason.Valid || queries.createArg.Reason.String != "Missing SOP" {
 		t.Errorf("persisted decision = calls %d arg %+v", queries.createCalls, queries.createArg)
 	}
+	if queries.evidenceCalls != 1 {
+		t.Fatalf("feedback evidence calls = %d, want 1", queries.evidenceCalls)
+	}
+	if queries.evidenceArg.CaseID != queries.caseResult.ID || queries.evidenceArg.SourceType != "CHECKER" || queries.evidenceArg.SourceUserID != actor.ID || queries.evidenceArg.EvidenceType != "REVIEWER_FEEDBACK" {
+		t.Errorf("feedback evidence identity/category = %+v", queries.evidenceArg)
+	}
+	if !queries.evidenceArg.Title.Valid || queries.evidenceArg.Title.String != "Checker rejection feedback" {
+		t.Errorf("feedback evidence title = %+v", queries.evidenceArg.Title)
+	}
+	wantContent := "Reason: Missing SOP\nComment: Recheck the controls\nCited evidence: 00000000-0000-0000-0000-000000000006, 00000000-0000-0000-0000-000000000007"
+	if !queries.evidenceArg.Content.Valid || queries.evidenceArg.Content.String != wantContent {
+		t.Errorf("feedback evidence content = %+v, want %q", queries.evidenceArg.Content, wantContent)
+	}
+	if queries.evidenceArg.FilePath.Valid || queries.evidenceArg.MimeType.Valid {
+		t.Errorf("feedback evidence file fields = path %+v mime %+v, want null", queries.evidenceArg.FilePath, queries.evidenceArg.MimeType)
+	}
 	if queries.auditArg.EventType != "CHECKER_REJECTED" {
 		t.Errorf("audit event = %q, want CHECKER_REJECTED", queries.auditArg.EventType)
+	}
+	wantOrder := "[decision evidence audit]"
+	if got := fmt.Sprint(queries.order); got != wantOrder {
+		t.Errorf("mutation order = %s, want %s", got, wantOrder)
+	}
+	var auditMetadata struct {
+		FeedbackEvidenceID string `json:"feedback_evidence_id"`
+	}
+	if err := json.Unmarshal(queries.auditArg.Metadata, &auditMetadata); err != nil {
+		t.Fatalf("decode rejection audit metadata: %v", err)
+	}
+	if auditMetadata.FeedbackEvidenceID != queries.evidenceArg.ID.String() {
+		t.Errorf("audit feedback evidence id = %q, want %q", auditMetadata.FeedbackEvidenceID, queries.evidenceArg.ID.String())
 	}
 }
 
@@ -319,10 +382,19 @@ func TestRecordCheckerDecisionRejectLimitReachedIsSuccess(t *testing.T) {
 	actor := caseTestUser(auth.SystemRoleUser)
 	queries := checkerDecisionFixture(actor)
 
-	response, _, _ := serveCheckerDecision(actor, queries, reanalysis.LimitReached,
+	response, _, orchestrator := serveCheckerDecision(actor, queries, reanalysis.LimitReached,
 		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"REJECT","reason":"No"}`)
 
 	assertCheckerDecisionSuccess(t, response, "REJECT", "ESCALATION_REQUIRED")
+	if queries.createCalls != 1 || queries.evidenceCalls != 1 {
+		t.Errorf("persisted limit-path mutations = decisions %d evidence %d, want 1 each", queries.createCalls, queries.evidenceCalls)
+	}
+	if got := fmt.Sprint(queries.order); got != "[decision evidence audit]" {
+		t.Errorf("limit-path mutation order = %s, want [decision evidence audit]", got)
+	}
+	if orchestrator.result.Analysis != nil {
+		t.Errorf("limit-path analysis = %+v, want nil", orchestrator.result.Analysis)
+	}
 }
 
 func TestRecordCheckerDecisionRejectRequiresReason(t *testing.T) {

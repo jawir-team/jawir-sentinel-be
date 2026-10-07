@@ -28,8 +28,8 @@ func TestInitialMigrationContainsRequiredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 1 || migrations[0].version != 1 {
-		t.Fatalf("migrations = %+v, want one initial migration", migrations)
+	if len(migrations) != 2 || migrations[0].version != 1 || migrations[1].version != 2 {
+		t.Fatalf("migrations = %+v, want migrations 1 and 2", migrations)
 	}
 	sql := strings.ToLower(migrations[0].up)
 	for _, required := range []string{
@@ -48,5 +48,8 @@ func TestInitialMigrationContainsRequiredSchema(t *testing.T) {
 		if !strings.Contains(sql, required) {
 			t.Errorf("initial migration does not contain %q", required)
 		}
+	}
+	if !strings.Contains(strings.ToLower(migrations[1].up), "reviewer_feedback") {
+		t.Error("migration 2 up SQL does not contain REVIEWER_FEEDBACK")
 	}
 }
