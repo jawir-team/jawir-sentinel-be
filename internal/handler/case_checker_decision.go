@@ -189,7 +189,7 @@ func recordCheckerApproval(
 		}
 
 		*caseStatus = stored.Status
-		if allRequiredCheckersApproved(participants, append(decisions, *decision)) {
+		if allRequiredCheckersApproved(request.analysisID, participants, append(decisions, *decision)) {
 			next, err := workflow.Transition(workflow.State(stored.Status), workflow.EventAllCheckersApproved)
 			if workflow.IsInvalidTransition(err) {
 				apiErr = participantAPIError(httpapi.CodeInvalidStateTransition, "", err)
@@ -312,6 +312,9 @@ func persistCheckerDecision(
 	if err != nil {
 		return db.Case{}, nil, nil, db.Decision{}, participantInternalError(err)
 	}
+	if request.decision == checkerDecisionApprove && summarizeCheckerRound(request.analysisID, participants, decisions).HasCheckerRejection {
+		return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeConflict, "Checker round has already been rejected.", nil)
+	}
 	for _, existing := range decisions {
 		if existing.ActorID == actor.ID && existing.ActorRole == caseRoleChecker {
 			return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeConflict, "Checker has already decided this analysis.", nil)
@@ -395,21 +398,6 @@ func persistCheckerDecision(
 		return db.Case{}, nil, nil, db.Decision{}, participantInternalError(err)
 	}
 	return stored, participants, decisions, created, nil
-}
-
-func allRequiredCheckersApproved(participants []db.CaseParticipant, decisions []db.Decision) bool {
-	approved := make(map[pgtype.UUID]bool, len(decisions))
-	for _, decision := range decisions {
-		if decision.ActorRole == caseRoleChecker && decision.Decision == checkerDecisionApprove {
-			approved[decision.ActorID] = true
-		}
-	}
-	for _, participant := range participants {
-		if participant.Status == participantStatusActive && participant.Role == caseRoleChecker && participant.Required && !approved[participant.UserID] {
-			return false
-		}
-	}
-	return true
 }
 
 func nullableCheckerText(value string) pgtype.Text {

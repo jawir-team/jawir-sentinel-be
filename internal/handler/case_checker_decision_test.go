@@ -213,6 +213,15 @@ func TestRecordCheckerDecisionApproveKeepsCheckingUntilAllRequiredApprove(t *tes
 func TestRecordCheckerDecisionApproveCompletesRequiredCheckers(t *testing.T) {
 	actor := caseTestUser(auth.SystemRoleUser)
 	queries := checkerDecisionFixture(actor)
+	secondCheckerID := handlerTestUUID(8)
+	queries.participants = append(queries.participants, db.CaseParticipant{
+		ID: handlerTestUUID(11), CaseID: queries.caseResult.ID, UserID: secondCheckerID,
+		Role: "CHECKER", Required: true, Status: "ACTIVE",
+	})
+	queries.decisions = []db.Decision{{
+		AnalysisID: queries.caseResult.CurrentAnalysisID,
+		ActorID:    secondCheckerID, ActorRole: "CHECKER", Decision: "APPROVE",
+	}}
 
 	response, _, _ := serveCheckerDecision(actor, queries, reanalysis.Queued,
 		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"APPROVE"}`)
@@ -220,6 +229,67 @@ func TestRecordCheckerDecisionApproveCompletesRequiredCheckers(t *testing.T) {
 	assertCheckerDecisionSuccess(t, response, "APPROVE", "SIGNING")
 	if queries.updateCalls != 1 || queries.updateArg.Status != "SIGNING" {
 		t.Errorf("status update = calls %d arg %+v, want one SIGNING update", queries.updateCalls, queries.updateArg)
+	}
+}
+
+func TestRecordCheckerDecisionOptionalCheckerPendingDoesNotBlock(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := checkerDecisionFixture(actor)
+	queries.participants = append(queries.participants, db.CaseParticipant{
+		ID: handlerTestUUID(11), CaseID: queries.caseResult.ID, UserID: handlerTestUUID(8),
+		Role: "CHECKER", Required: false, Status: "ACTIVE",
+	})
+
+	response, _, _ := serveCheckerDecision(actor, queries, reanalysis.Queued,
+		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"APPROVE"}`)
+
+	assertCheckerDecisionSuccess(t, response, "APPROVE", "SIGNING")
+	if queries.updateCalls != 1 || queries.updateArg.Status != "SIGNING" {
+		t.Errorf("status update = calls %d arg %+v, want one SIGNING update", queries.updateCalls, queries.updateArg)
+	}
+}
+
+func TestRecordCheckerDecisionOldAnalysisApprovalDoesNotCompleteRound(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := checkerDecisionFixture(actor)
+	secondCheckerID := handlerTestUUID(8)
+	queries.participants = append(queries.participants, db.CaseParticipant{
+		ID: handlerTestUUID(11), CaseID: queries.caseResult.ID, UserID: secondCheckerID,
+		Role: "CHECKER", Required: true, Status: "ACTIVE",
+	})
+	queries.decisions = []db.Decision{{
+		AnalysisID: handlerTestUUID(7), ActorID: secondCheckerID,
+		ActorRole: "CHECKER", Decision: "APPROVE",
+	}}
+
+	response, _, _ := serveCheckerDecision(actor, queries, reanalysis.Queued,
+		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"APPROVE"}`)
+
+	assertCheckerDecisionSuccess(t, response, "APPROVE", "CHECKING")
+	if queries.updateCalls != 0 {
+		t.Errorf("status update calls = %d, want 0", queries.updateCalls)
+	}
+}
+
+func TestRecordCheckerDecisionLateApprovalRejectedRoundDoesNotTransition(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := checkerDecisionFixture(actor)
+	secondCheckerID := handlerTestUUID(8)
+	queries.participants = append(queries.participants, db.CaseParticipant{
+		ID: handlerTestUUID(11), CaseID: queries.caseResult.ID, UserID: secondCheckerID,
+		Role: "CHECKER", Required: false, Status: "ACTIVE",
+	})
+	queries.decisions = []db.Decision{{
+		AnalysisID: queries.caseResult.CurrentAnalysisID, ActorID: secondCheckerID,
+		ActorRole: "CHECKER", Decision: "REJECT",
+	}}
+
+	response, _, _ := serveCheckerDecision(actor, queries, reanalysis.Queued,
+		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"APPROVE"}`)
+
+	assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeConflict)
+	if queries.createCalls != 0 || queries.auditCalls != 0 || queries.updateCalls != 0 {
+		t.Errorf("mutation calls = create %d audit %d update %d, want all zero", queries.createCalls, queries.auditCalls, queries.updateCalls)
 	}
 }
 
