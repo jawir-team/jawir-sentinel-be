@@ -31,6 +31,11 @@ const (
 // transactions and in re-analysis-owned rejection transactions.
 type DecisionTxQueries interface {
 	GetCaseForUpdate(context.Context, pgtype.UUID) (db.Case, error)
+	GetCaseType(context.Context, pgtype.UUID) (db.CaseType, error)
+	GetAnalysis(context.Context, pgtype.UUID) (db.AiAnalysis, error)
+	ListAnalysisPolicyRefs(context.Context, pgtype.UUID) ([]db.AnalysisPolicyRef, error)
+	ListAnalysisEvidenceRefs(context.Context, pgtype.UUID) ([]db.AnalysisEvidenceRef, error)
+	GetPolicyVersion(context.Context, pgtype.UUID) (db.PolicyVersion, error)
 	ListCaseParticipants(context.Context, pgtype.UUID) ([]db.CaseParticipant, error)
 	ListDecisionsByAnalysis(context.Context, pgtype.UUID) ([]db.Decision, error)
 	ListCaseEvidences(context.Context, pgtype.UUID) ([]db.CaseEvidence, error)

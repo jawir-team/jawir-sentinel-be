@@ -20,12 +20,17 @@ import (
 )
 
 type fakeCheckerDecisionQueries struct {
-	caseResult   db.Case
-	caseErr      error
-	participants []db.CaseParticipant
-	decisions    []db.Decision
-	evidences    []db.CaseEvidence
-	order        []string
+	caseResult     db.Case
+	caseErr        error
+	caseTypeResult db.CaseType
+	analysisResult db.AiAnalysis
+	policyRefs     []db.AnalysisPolicyRef
+	evidenceRefs   []db.AnalysisEvidenceRef
+	policyVersions map[pgtype.UUID]db.PolicyVersion
+	participants   []db.CaseParticipant
+	decisions      []db.Decision
+	evidences      []db.CaseEvidence
+	order          []string
 
 	createArg     db.CreateDecisionParams
 	createErr     error
@@ -46,6 +51,26 @@ var (
 
 func (f *fakeCheckerDecisionQueries) GetCaseForUpdate(context.Context, pgtype.UUID) (db.Case, error) {
 	return f.caseResult, f.caseErr
+}
+
+func (f *fakeCheckerDecisionQueries) GetCaseType(context.Context, pgtype.UUID) (db.CaseType, error) {
+	return f.caseTypeResult, nil
+}
+
+func (f *fakeCheckerDecisionQueries) GetAnalysis(context.Context, pgtype.UUID) (db.AiAnalysis, error) {
+	return f.analysisResult, nil
+}
+
+func (f *fakeCheckerDecisionQueries) ListAnalysisPolicyRefs(context.Context, pgtype.UUID) ([]db.AnalysisPolicyRef, error) {
+	return f.policyRefs, nil
+}
+
+func (f *fakeCheckerDecisionQueries) ListAnalysisEvidenceRefs(context.Context, pgtype.UUID) ([]db.AnalysisEvidenceRef, error) {
+	return f.evidenceRefs, nil
+}
+
+func (f *fakeCheckerDecisionQueries) GetPolicyVersion(_ context.Context, id pgtype.UUID) (db.PolicyVersion, error) {
+	return f.policyVersions[id], nil
 }
 
 func (f *fakeCheckerDecisionQueries) ListCaseParticipants(context.Context, pgtype.UUID) ([]db.CaseParticipant, error) {
@@ -70,7 +95,7 @@ func (f *fakeCheckerDecisionQueries) CreateDecision(_ context.Context, arg db.Cr
 	return db.Decision{
 		ID: arg.ID, CaseID: arg.CaseID, AnalysisID: arg.AnalysisID,
 		ActorID: arg.ActorID, ActorRole: arg.ActorRole, Decision: arg.Decision,
-		Reason: arg.Reason, Comment: arg.Comment,
+		Reason: arg.Reason, Comment: arg.Comment, CreatedAt: caseTestTime,
 	}, nil
 }
 
@@ -170,6 +195,14 @@ func checkerDecisionFixture(actor auth.User) *fakeCheckerDecisionQueries {
 			CreatedBy: actor.ID, OwnerID: actor.ID, CurrentAnalysisID: analysisID,
 			CreatedAt: caseTestTime, UpdatedAt: caseTestTime,
 		},
+		caseTypeResult: db.CaseType{
+			ID: handlerTestUUID(3), Code: "OPERATIONAL_INCIDENT", Name: "Operational Incident",
+		},
+		analysisResult: db.AiAnalysis{
+			ID: analysisID, CaseID: caseID, Version: 1, Status: "COMPLETED",
+			Recommendation: []byte(`{"type":"POLICY_BASED","summary":"Repair immediately"}`),
+		},
+		policyVersions: make(map[pgtype.UUID]db.PolicyVersion),
 		participants: []db.CaseParticipant{
 			{ID: handlerTestUUID(10), CaseID: caseID, UserID: actor.ID, Role: "CHECKER", Required: true, Status: "ACTIVE"},
 		},
@@ -240,6 +273,9 @@ func TestRecordCheckerDecisionApproveKeepsCheckingUntilAllRequiredApprove(t *tes
 	}
 	if _, exists := metadata["feedback_evidence_id"]; exists {
 		t.Errorf("approval audit metadata = %s, must not contain feedback_evidence_id", queries.auditArg.Metadata)
+	}
+	if _, exists := metadata["decision_snapshot"]; exists {
+		t.Errorf("checker approval audit metadata = %s, must not contain decision_snapshot", queries.auditArg.Metadata)
 	}
 }
 
