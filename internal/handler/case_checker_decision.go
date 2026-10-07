@@ -26,10 +26,10 @@ const (
 	reviewerFeedbackEvidenceType = "REVIEWER_FEEDBACK"
 )
 
-// CheckerDecisionTxQueries is the database boundary for recording a checker
-// decision. *db.Queries satisfies it both in the handler-owned approval
-// transaction and in the re-analysis-owned rejection transaction.
-type CheckerDecisionTxQueries interface {
+// DecisionTxQueries is the database boundary for recording a checker or signer
+// decision. *db.Queries satisfies it both in handler-owned approval
+// transactions and in re-analysis-owned rejection transactions.
+type DecisionTxQueries interface {
 	GetCaseForUpdate(context.Context, pgtype.UUID) (db.Case, error)
 	ListCaseParticipants(context.Context, pgtype.UUID) ([]db.CaseParticipant, error)
 	ListDecisionsByAnalysis(context.Context, pgtype.UUID) ([]db.Decision, error)
@@ -40,7 +40,11 @@ type CheckerDecisionTxQueries interface {
 	UpdateCaseStatus(context.Context, db.UpdateCaseStatusParams) (db.Case, error)
 }
 
-var _ CheckerDecisionTxQueries = (*db.Queries)(nil)
+var _ DecisionTxQueries = (*db.Queries)(nil)
+
+// CheckerDecisionTxQueries is kept as the public transaction callback type so
+// existing stores do not need a second, identical transaction method.
+type CheckerDecisionTxQueries = DecisionTxQueries
 
 // CheckerDecisionStore runs an approval in one database transaction.
 type CheckerDecisionStore interface {
@@ -60,7 +64,7 @@ type CheckerDecider struct {
 	Reanalysis ReanalysisOrchestrator
 }
 
-type checkerDecisionRequest struct {
+type reviewerDecisionRequest struct {
 	AnalysisID  string   `json:"analysis_id"`
 	Decision    string   `json:"decision"`
 	Comment     string   `json:"comment"`
@@ -68,7 +72,7 @@ type checkerDecisionRequest struct {
 	EvidenceIDs []string `json:"evidence_ids"`
 }
 
-type parsedCheckerDecision struct {
+type parsedReviewerDecision struct {
 	analysisID  pgtype.UUID
 	decision    string
 	comment     string
@@ -76,7 +80,7 @@ type parsedCheckerDecision struct {
 	evidenceIDs []pgtype.UUID
 }
 
-type checkerDecisionResponse struct {
+type reviewerDecisionResponse struct {
 	DecisionID string `json:"decision_id"`
 	Decision   string `json:"decision"`
 	CaseStatus string `json:"case_status"`
@@ -103,7 +107,7 @@ func RecordCheckerDecision(decider CheckerDecider) http.HandlerFunc {
 			writeInvalidCaseRequest(w, "A valid case ID is required.")
 			return
 		}
-		request, apiErr := parseCheckerDecisionRequest(w, r)
+		request, apiErr := parseReviewerDecisionRequest(w, r)
 		if apiErr != nil {
 			httpapi.WriteError(w, apiErr)
 			return
@@ -124,7 +128,7 @@ func RecordCheckerDecision(decider CheckerDecider) http.HandlerFunc {
 			return
 		}
 
-		httpapi.WriteJSON(w, http.StatusOK, httpapi.SuccessEnvelope{Data: checkerDecisionResponse{
+		httpapi.WriteJSON(w, http.StatusOK, httpapi.SuccessEnvelope{Data: reviewerDecisionResponse{
 			DecisionID: decision.ID.String(),
 			Decision:   decision.Decision,
 			CaseStatus: caseStatus,
@@ -132,23 +136,23 @@ func RecordCheckerDecision(decider CheckerDecider) http.HandlerFunc {
 	}
 }
 
-func parseCheckerDecisionRequest(w http.ResponseWriter, r *http.Request) (parsedCheckerDecision, *httpapi.APIError) {
-	var raw checkerDecisionRequest
+func parseReviewerDecisionRequest(w http.ResponseWriter, r *http.Request) (parsedReviewerDecision, *httpapi.APIError) {
+	var raw reviewerDecisionRequest
 	if err := decodeCaseRequest(w, r, &raw); err != nil {
-		return parsedCheckerDecision{}, participantAPIError(httpapi.CodeInvalidRequest, "Invalid request body.", err)
+		return parsedReviewerDecision{}, participantAPIError(httpapi.CodeInvalidRequest, "Invalid request body.", err)
 	}
 
 	decision := strings.ToUpper(strings.TrimSpace(raw.Decision))
 	if decision != checkerDecisionApprove && decision != checkerDecisionReject {
-		return parsedCheckerDecision{}, participantAPIError(httpapi.CodeValidationError, "Decision must be APPROVE or REJECT.", nil)
+		return parsedReviewerDecision{}, participantAPIError(httpapi.CodeValidationError, "Decision must be APPROVE or REJECT.", nil)
 	}
 	analysisID, err := parseUserUUID(raw.AnalysisID)
 	if err != nil {
-		return parsedCheckerDecision{}, participantAPIError(httpapi.CodeInvalidRequest, "A valid analysis_id is required.", err)
+		return parsedReviewerDecision{}, participantAPIError(httpapi.CodeInvalidRequest, "A valid analysis_id is required.", err)
 	}
 	reason := strings.TrimSpace(raw.Reason)
 	if decision == checkerDecisionReject && reason == "" {
-		return parsedCheckerDecision{}, participantAPIError(httpapi.CodeValidationError, "Reason is required for a rejection.", nil)
+		return parsedReviewerDecision{}, participantAPIError(httpapi.CodeValidationError, "Reason is required for a rejection.", nil)
 	}
 	if decision != checkerDecisionReject {
 		reason = ""
@@ -158,11 +162,11 @@ func parseCheckerDecisionRequest(w http.ResponseWriter, r *http.Request) (parsed
 	for _, value := range raw.EvidenceIDs {
 		id, err := parseUserUUID(value)
 		if err != nil {
-			return parsedCheckerDecision{}, participantAPIError(httpapi.CodeInvalidRequest, "Each evidence_id must be a valid UUID.", err)
+			return parsedReviewerDecision{}, participantAPIError(httpapi.CodeInvalidRequest, "Each evidence_id must be a valid UUID.", err)
 		}
 		evidenceIDs = append(evidenceIDs, id)
 	}
-	return parsedCheckerDecision{
+	return parsedReviewerDecision{
 		analysisID:  analysisID,
 		decision:    decision,
 		comment:     strings.TrimSpace(raw.Comment),
@@ -176,7 +180,7 @@ func recordCheckerApproval(
 	store CheckerDecisionStore,
 	caseID pgtype.UUID,
 	actor auth.User,
-	request parsedCheckerDecision,
+	request parsedReviewerDecision,
 	decision *db.Decision,
 	caseStatus *string,
 ) *httpapi.APIError {
@@ -185,11 +189,11 @@ func recordCheckerApproval(
 		var stored db.Case
 		var participants []db.CaseParticipant
 		var decisions []db.Decision
-		stored, participants, decisions, *decision, apiErr = persistCheckerDecision(ctx, q, caseID, actor, request)
+		stored, participants, decisions, *decision, apiErr = persistReviewerDecision(ctx, q, caseID, actor, request, checkerDecisionConfig)
 		if apiErr != nil {
 			return apiErr
 		}
-		if apiErr = appendCheckerDecisionAudit(ctx, q, caseID, actor, request, nil); apiErr != nil {
+		if apiErr = appendReviewerDecisionAudit(ctx, q, caseID, actor, request, checkerDecisionConfig, nil); apiErr != nil {
 			return apiErr
 		}
 
@@ -231,28 +235,42 @@ func recordCheckerRejection(
 	orchestrator ReanalysisOrchestrator,
 	caseID pgtype.UUID,
 	actor auth.User,
-	request parsedCheckerDecision,
+	request parsedReviewerDecision,
+	decision *db.Decision,
+	caseStatus *string,
+) *httpapi.APIError {
+	return recordReviewerRejection(ctx, orchestrator, caseID, actor, request, workflow.EventCheckerRejected, checkerDecisionConfig, decision, caseStatus)
+}
+
+func recordReviewerRejection(
+	ctx context.Context,
+	orchestrator ReanalysisOrchestrator,
+	caseID pgtype.UUID,
+	actor auth.User,
+	request parsedReviewerDecision,
+	trigger workflow.Event,
+	config reviewerDecisionConfig,
 	decision *db.Decision,
 	caseStatus *string,
 ) *httpapi.APIError {
 	result, err := orchestrator.Run(ctx, reanalysis.Request{
 		CaseID:        caseID,
-		Trigger:       workflow.EventCheckerRejected,
+		Trigger:       trigger,
 		ActorID:       actor.ID,
-		ActorRole:     caseRoleChecker,
+		ActorRole:     config.actorRole,
 		ModelName:     "",
 		PromptVersion: "",
 	}, func(ctx context.Context, tx db.DBTX, _ db.Case) error {
-		q := checkerDecisionQueries(tx)
-		_, _, _, created, apiErr := persistCheckerDecision(ctx, q, caseID, actor, request)
+		q := reviewerDecisionQueries(tx)
+		_, _, _, created, apiErr := persistReviewerDecision(ctx, q, caseID, actor, request, config)
 		if apiErr != nil {
 			return apiErr
 		}
-		feedback, apiErr := persistReviewerFeedbackEvidence(ctx, q, caseID, actor, request)
+		feedback, apiErr := persistReviewerFeedbackEvidence(ctx, q, caseID, actor, request, config)
 		if apiErr != nil {
 			return apiErr
 		}
-		if apiErr = appendCheckerDecisionAudit(ctx, q, caseID, actor, request, &feedback.ID); apiErr != nil {
+		if apiErr = appendReviewerDecisionAudit(ctx, q, caseID, actor, request, config, &feedback.ID); apiErr != nil {
 			return apiErr
 		}
 		*decision = created
@@ -278,21 +296,43 @@ func recordCheckerRejection(
 	return nil
 }
 
-func checkerDecisionQueries(tx db.DBTX) CheckerDecisionTxQueries {
+func reviewerDecisionQueries(tx db.DBTX) DecisionTxQueries {
 	// The direct form is useful for in-memory transaction fakes. Production
 	// pgx transactions take the db.New path.
-	if q, ok := tx.(CheckerDecisionTxQueries); ok {
+	if q, ok := tx.(DecisionTxQueries); ok {
 		return q
 	}
 	return db.New(tx)
 }
 
-func persistCheckerDecision(
+type reviewerDecisionConfig struct {
+	actorRole                   string
+	requiredState               workflow.State
+	approvedEvent               string
+	rejectedEvent               string
+	feedbackTitle               string
+	duplicateActorLabel         string
+	requireApprovedCheckerRound bool
+	unassignedErrorCode         httpapi.ErrorCode
+}
+
+var checkerDecisionConfig = reviewerDecisionConfig{
+	actorRole:           caseRoleChecker,
+	requiredState:       workflow.StateChecking,
+	approvedEvent:       checkerEventApproved,
+	rejectedEvent:       checkerEventRejected,
+	feedbackTitle:       "Checker rejection feedback",
+	duplicateActorLabel: "Checker",
+	unassignedErrorCode: httpapi.CodeCaseNotFound,
+}
+
+func persistReviewerDecision(
 	ctx context.Context,
-	q CheckerDecisionTxQueries,
+	q DecisionTxQueries,
 	caseID pgtype.UUID,
 	actor auth.User,
-	request parsedCheckerDecision,
+	request parsedReviewerDecision,
+	config reviewerDecisionConfig,
 ) (db.Case, []db.CaseParticipant, []db.Decision, db.Decision, *httpapi.APIError) {
 	stored, err := q.GetCaseForUpdate(ctx, caseID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -301,7 +341,7 @@ func persistCheckerDecision(
 	if err != nil {
 		return db.Case{}, nil, nil, db.Decision{}, participantInternalError(err)
 	}
-	if stored.Status != string(workflow.StateChecking) {
+	if stored.Status != string(config.requiredState) {
 		return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeInvalidStateTransition, "", nil)
 	}
 
@@ -311,9 +351,9 @@ func persistCheckerDecision(
 	}
 	actorRole, allowed := participantActorRole(participants, actor)
 	if !allowed {
-		return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeCaseNotFound, "", nil)
+		return db.Case{}, nil, nil, db.Decision{}, participantAPIError(config.unassignedErrorCode, "", nil)
 	}
-	if actorRole != caseRoleChecker {
+	if actorRole != config.actorRole {
 		return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeForbidden, "", nil)
 	}
 	if !stored.CurrentAnalysisID.Valid || stored.CurrentAnalysisID != request.analysisID {
@@ -324,12 +364,16 @@ func persistCheckerDecision(
 	if err != nil {
 		return db.Case{}, nil, nil, db.Decision{}, participantInternalError(err)
 	}
-	if request.decision == checkerDecisionApprove && summarizeCheckerRound(request.analysisID, participants, decisions).HasCheckerRejection {
+	checkerRound := summarizeCheckerRound(request.analysisID, participants, decisions)
+	if config.requireApprovedCheckerRound && (checkerRound.HasCheckerRejection || checkerRound.Approved != checkerRound.Required) {
+		return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeInvalidStateTransition, "All required checkers must approve the current analysis before signer review.", nil)
+	}
+	if config.actorRole == caseRoleChecker && request.decision == checkerDecisionApprove && checkerRound.HasCheckerRejection {
 		return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeConflict, "Checker round has already been rejected.", nil)
 	}
 	for _, existing := range decisions {
-		if existing.ActorID == actor.ID && existing.ActorRole == caseRoleChecker {
-			return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeConflict, "Checker has already decided this analysis.", nil)
+		if existing.ActorID == actor.ID && existing.ActorRole == config.actorRole {
+			return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeConflict, config.duplicateActorLabel+" has already decided this analysis.", nil)
 		}
 	}
 
@@ -358,14 +402,14 @@ func persistCheckerDecision(
 		CaseID:     caseID,
 		AnalysisID: request.analysisID,
 		ActorID:    actor.ID,
-		ActorRole:  caseRoleChecker,
+		ActorRole:  config.actorRole,
 		Decision:   request.decision,
 		Reason:     nullableCheckerText(request.reason),
 		Comment:    nullableCheckerText(request.comment),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeConflict, "Checker has already decided this analysis.", err)
+			return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeConflict, config.duplicateActorLabel+" has already decided this analysis.", err)
 		}
 		return db.Case{}, nil, nil, db.Decision{}, participantInternalError(err)
 	}
@@ -375,10 +419,11 @@ func persistCheckerDecision(
 
 func persistReviewerFeedbackEvidence(
 	ctx context.Context,
-	q CheckerDecisionTxQueries,
+	q DecisionTxQueries,
 	caseID pgtype.UUID,
 	actor auth.User,
-	request parsedCheckerDecision,
+	request parsedReviewerDecision,
+	config reviewerDecisionConfig,
 ) (db.CaseEvidence, *httpapi.APIError) {
 	evidenceID, err := newUnitUUID()
 	if err != nil {
@@ -399,10 +444,10 @@ func persistReviewerFeedbackEvidence(
 	created, err := q.CreateEvidence(ctx, db.CreateEvidenceParams{
 		ID:           evidenceID,
 		CaseID:       caseID,
-		SourceType:   caseRoleChecker,
+		SourceType:   config.actorRole,
 		SourceUserID: actor.ID,
 		EvidenceType: reviewerFeedbackEvidenceType,
-		Title:        pgtype.Text{String: "Checker rejection feedback", Valid: true},
+		Title:        pgtype.Text{String: config.feedbackTitle, Valid: true},
 		Content:      pgtype.Text{String: content, Valid: true},
 		FilePath:     pgtype.Text{},
 		MimeType:     pgtype.Text{},
@@ -413,12 +458,13 @@ func persistReviewerFeedbackEvidence(
 	return created, nil
 }
 
-func appendCheckerDecisionAudit(
+func appendReviewerDecisionAudit(
 	ctx context.Context,
-	q CheckerDecisionTxQueries,
+	q DecisionTxQueries,
 	caseID pgtype.UUID,
 	actor auth.User,
-	request parsedCheckerDecision,
+	request parsedReviewerDecision,
+	config reviewerDecisionConfig,
 	feedbackEvidenceID *pgtype.UUID,
 ) *httpapi.APIError {
 	metadataEvidenceIDs := make([]string, 0, len(request.evidenceIDs))
@@ -452,16 +498,16 @@ func appendCheckerDecisionAudit(
 	if err != nil {
 		return participantInternalError(err)
 	}
-	eventType := checkerEventApproved
+	eventType := config.approvedEvent
 	if request.decision == checkerDecisionReject {
-		eventType = checkerEventRejected
+		eventType = config.rejectedEvent
 	}
 	if _, err := q.AppendCaseAuditEvent(ctx, db.AppendCaseAuditEventParams{
 		ID:         auditID,
 		CaseID:     caseID,
 		EventType:  eventType,
 		ActorID:    actor.ID,
-		ActorRole:  nullableWorkflowActorRole(caseRoleChecker),
+		ActorRole:  nullableWorkflowActorRole(config.actorRole),
 		AnalysisID: request.analysisID,
 		Metadata:   metadata,
 	}); err != nil {

@@ -130,6 +130,9 @@ func newServerWithStores(
 	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/checker-decisions", handler.RecordCheckerDecision(handler.CheckerDecider{
 		Store: checkerDecisionStore, Reanalysis: reanalysisOrchestrator,
 	}))
+	protected.With(auth.RequireAuth).Post("/v1/cases/{id}/signer-decisions", handler.RecordSignerDecision(handler.SignerDecider{
+		Store: checkerDecisionStore, Reanalysis: reanalysisOrchestrator,
+	}))
 	checkerStatusStore, _ := caseStore.(handler.CheckerStatusStore)
 	protected.With(auth.RequireAuth).Get("/v1/cases/{id}/checker-status", handler.GetCheckerStatus(checkerStatusStore))
 	evidenceStore, _ := caseParticipantStore.(handler.EvidenceStore)
