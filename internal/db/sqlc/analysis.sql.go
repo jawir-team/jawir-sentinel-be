@@ -94,6 +94,30 @@ func (q *Queries) GetAnalysisForUpdate(ctx context.Context, id pgtype.UUID) (AiA
 	return i, err
 }
 
+const getLatestAnalysisForCase = `-- name: GetLatestAnalysisForCase :one
+SELECT id, case_id, version, status, technical_retry_count, worker_attempt_id,
+       worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
+       compliance_analysis, recommendation, alternatives, missing_information,
+       policy_status, evidence_quality, uncertainty, verification_status,
+       verification_notes, model_name, prompt_version, created_at
+FROM ai_analyses
+WHERE case_id = $1
+ORDER BY version DESC, created_at DESC
+LIMIT 1`
+
+func (q *Queries) GetLatestAnalysisForCase(ctx context.Context, caseID pgtype.UUID) (AiAnalysis, error) {
+	row := q.dbx.QueryRow(ctx, getLatestAnalysisForCase, caseID)
+	var i AiAnalysis
+	err := row.Scan(
+		&i.ID, &i.CaseID, &i.Version, &i.Status, &i.TechnicalRetryCount, &i.WorkerAttemptID,
+		&i.WorkerStartedAt, &i.Summary, &i.Facts, &i.Assumptions, &i.Unknowns, &i.RiskAnalysis,
+		&i.ComplianceAnalysis, &i.Recommendation, &i.Alternatives, &i.MissingInformation,
+		&i.PolicyStatus, &i.EvidenceQuality, &i.Uncertainty, &i.VerificationStatus,
+		&i.VerificationNotes, &i.ModelName, &i.PromptVersion, &i.CreatedAt,
+	)
+	return i, err
+}
+
 const updateAnalysisResult = `-- name: UpdateAnalysisResult :one
 UPDATE ai_analyses
 SET status = $2, summary = $3, facts = $4, assumptions = $5, unknowns = $6,

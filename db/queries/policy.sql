@@ -117,3 +117,17 @@ WHERE pv.status = 'ACTIVE'
   AND (p.case_type_id = $2 OR p.case_type_id IS NULL)
 ORDER BY pc.embedding <=> $1::vector
 LIMIT $3;
+
+-- name: ListActiveReadyPolicyChunks :many
+SELECT pc.id AS chunk_id, pc.policy_version_id, pc.chunk_index, pc.section, pc.content,
+       pv.version AS version, p.id AS policy_id, p.code AS policy_code,
+       p.title AS policy_title
+FROM policy_chunks pc
+JOIN policy_versions pv ON pv.id = pc.policy_version_id
+JOIN policies p ON p.id = pv.policy_id
+WHERE pv.status = 'ACTIVE'
+  AND pv.index_status = 'READY'
+  AND (pv.effective_from IS NULL OR pv.effective_from <= now())
+  AND (pv.effective_until IS NULL OR pv.effective_until > now())
+  AND (p.case_type_id = $1 OR p.case_type_id IS NULL)
+ORDER BY p.code, pv.version, pc.chunk_index, pc.id;

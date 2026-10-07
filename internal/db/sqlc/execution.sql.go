@@ -53,6 +53,30 @@ func (q *Queries) GetExecutionForUpdate(ctx context.Context, id pgtype.UUID) (Ex
 	return i, err
 }
 
+const listExecutionsForCase = `-- name: ListExecutionsForCase :many
+SELECT id, case_id, analysis_id, executer_id, status, action_taken, result,
+       blocker, started_at, completed_at, created_at
+FROM executions
+WHERE case_id = $1
+ORDER BY created_at DESC, id DESC`
+
+func (q *Queries) ListExecutionsForCase(ctx context.Context, caseID pgtype.UUID) ([]Execution, error) {
+	rows, err := q.dbx.Query(ctx, listExecutionsForCase, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Execution, 0)
+	for rows.Next() {
+		var i Execution
+		if err := rows.Scan(&i.ID, &i.CaseID, &i.AnalysisID, &i.ExecuterID, &i.Status, &i.ActionTaken, &i.Result, &i.Blocker, &i.StartedAt, &i.CompletedAt, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
 const updateExecution = `-- name: UpdateExecution :one
 UPDATE executions
 SET status = $2, action_taken = $3, result = $4, blocker = $5, completed_at = $6

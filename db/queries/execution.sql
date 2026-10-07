@@ -20,3 +20,10 @@ RETURNING id, case_id, analysis_id, executer_id, status, action_taken, result,
 
 -- name: ExistsRunningExecution :one
 SELECT EXISTS(SELECT 1 FROM executions WHERE case_id = $1 AND status = 'IN_PROGRESS');
+
+-- name: ListExecutionsForCase :many
+SELECT id, case_id, analysis_id, executer_id, status, action_taken, result,
+       blocker, started_at, completed_at, created_at
+FROM executions
+WHERE case_id = $1
+ORDER BY created_at DESC, id DESC;

@@ -42,3 +42,14 @@ RETURNING id, case_id, version, status, technical_retry_count, worker_attempt_id
 
 -- name: ExistsGeneratingAnalysis :one
 SELECT EXISTS(SELECT 1 FROM ai_analyses WHERE case_id = $1 AND status = 'GENERATING');
+
+-- name: GetLatestAnalysisForCase :one
+SELECT id, case_id, version, status, technical_retry_count, worker_attempt_id,
+       worker_started_at, summary, facts, assumptions, unknowns, risk_analysis,
+       compliance_analysis, recommendation, alternatives, missing_information,
+       policy_status, evidence_quality, uncertainty, verification_status,
+       verification_notes, model_name, prompt_version, created_at
+FROM ai_analyses
+WHERE case_id = $1
+ORDER BY version DESC, created_at DESC
+LIMIT 1;
