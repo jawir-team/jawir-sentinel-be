@@ -11,6 +11,8 @@ import (
 
 const activeUserStatus = "ACTIVE"
 
+const invalidAuthenticationMessage = "Authentication credentials are invalid or expired."
+
 // UserStore is the database boundary needed to map a Firebase identity to a
 // Sentinel user. *db.Queries satisfies this interface.
 type UserStore interface {
@@ -26,19 +28,19 @@ func Middleware(verifier TokenVerifier, users UserStore) func(http.Handler) http
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token, ok := bearerToken(r.Header.Values("Authorization"))
 			if !ok || verifier == nil || users == nil {
-				writeUnauthorized(w)
+				writeUnauthorized(w, "")
 				return
 			}
 
 			firebaseUID, err := verifier.VerifyIDToken(r.Context(), token)
 			if err != nil || firebaseUID == "" {
-				writeUnauthorized(w)
+				writeUnauthorized(w, invalidAuthenticationMessage)
 				return
 			}
 
 			storedUser, err := users.GetUserByFirebaseUID(r.Context(), firebaseUID)
 			if err != nil || !validStoredUser(storedUser, firebaseUID) {
-				writeUnauthorized(w)
+				writeUnauthorized(w, invalidAuthenticationMessage)
 				return
 			}
 
@@ -76,6 +78,6 @@ func validStoredUser(user db.User, verifiedUID string) bool {
 	return user.SystemRole == SystemRoleUser || user.SystemRole == SystemRoleAdmin
 }
 
-func writeUnauthorized(w http.ResponseWriter) {
-	httpapi.WriteError(w, httpapi.NewError(httpapi.CodeUnauthorized, "", nil))
+func writeUnauthorized(w http.ResponseWriter, message string) {
+	httpapi.WriteError(w, httpapi.NewError(httpapi.CodeUnauthorized, message, nil))
 }

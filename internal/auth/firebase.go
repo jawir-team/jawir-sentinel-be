@@ -3,28 +3,49 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+
+	firebase "firebase.google.com/go/v4"
+	firebaseauth "firebase.google.com/go/v4/auth"
 )
 
-// ErrVerifierNotConfigured is returned by the local verifier placeholder.
-// Replace NewVerifier with a firebase-admin-go-backed implementation when the
-// runtime has Firebase project credentials.
-var ErrVerifierNotConfigured = errors.New("firebase token verifier is not configured")
+var ErrVerifierNotConfigured = errors.New("firebase project ID is required")
+
+type firebaseVerifier struct {
+	client *firebaseauth.Client
+}
 
 // TokenVerifier verifies a Firebase ID token and returns its Firebase UID.
 type TokenVerifier interface {
 	VerifyIDToken(ctx context.Context, token string) (uid string, err error)
 }
 
-type unconfiguredVerifier struct{}
+func NewVerifier(ctx context.Context, projectID string) (TokenVerifier, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, ErrVerifierNotConfigured
+	}
 
-// NewVerifier returns a verifier that fails closed with
-// ErrVerifierNotConfigured. No Firebase credentials or Admin SDK integration
-// are available in this repository yet; tests inject a verifier at this
-// interface boundary.
-func NewVerifier() TokenVerifier {
-	return unconfiguredVerifier{}
+	configFirebase := &firebase.Config{ProjectID: projectID}
+
+	app, err := firebase.NewApp(ctx, configFirebase)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Firebase app: %w", err)
+	}
+
+	client, err := app.Auth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Firebase auth client: %w", err)
+	}
+
+	return &firebaseVerifier{client: client}, nil
 }
 
-func (unconfiguredVerifier) VerifyIDToken(context.Context, string) (string, error) {
-	return "", ErrVerifierNotConfigured
+func (v *firebaseVerifier) VerifyIDToken(ctx context.Context, token string) (string, error) {
+	decodedToken, err := v.client.VerifyIDToken(ctx, token)
+	if err != nil {
+		return "", err
+	}
+	return decodedToken.UID, nil
 }

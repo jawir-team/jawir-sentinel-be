@@ -106,7 +106,7 @@ func defaultMessage(code ErrorCode) string {
 	case CodeInvalidRequest:
 		return "Invalid request."
 	case CodeUnauthorized:
-		return "Authentication is required."
+		return "Authentication credentials are required."
 	case CodeForbidden:
 		return "You do not have permission to perform this action."
 	case CodeSegregationOfDutiesViolation:
