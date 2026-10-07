@@ -126,7 +126,11 @@ func (s *Service) FinalizeCompleted(
 	analysisID, workerAttemptID pgtype.UUID,
 	result ai.CandidateAnalysis,
 	vr ai.VerificationResult,
+	provenance *ai.AnalysisProvenance,
 ) (db.AiAnalysis, error) {
+	if err := validateProvenance(provenance); err != nil {
+		return db.AiAnalysis{}, err
+	}
 	encoded, err := encodeCandidate(result)
 	if err != nil {
 		return db.AiAnalysis{}, err
@@ -153,6 +157,9 @@ func (s *Service) FinalizeCompleted(
 		if err != nil {
 			return db.AiAnalysis{}, err
 		}
+		if err := persistProvenance(ctx, q, analysisID, provenance); err != nil {
+			return db.AiAnalysis{}, err
+		}
 		if err := q.SetCaseCurrentAnalysis(ctx, db.SetCaseCurrentAnalysisParams{
 			ID:                attempt.CaseID,
 			CurrentAnalysisID: analysisID,
@@ -171,12 +178,16 @@ func (s *Service) FinalizeFailed(
 	analysisID, workerAttemptID pgtype.UUID,
 	valid *ai.CandidateAnalysis,
 	vr *ai.VerificationResult,
+	provenance *ai.AnalysisProvenance,
 ) (db.AiAnalysis, error) {
 	var encoded encodedCandidate
 	var verificationStatus ai.VerificationStatus
 	var notes []byte
 
 	if valid == nil {
+		if provenance != nil && (len(provenance.PolicyRefs) > 0 || len(provenance.EvidenceRefs) > 0) {
+			return db.AiAnalysis{}, fmt.Errorf("%w: %w: provenance requires a schema-valid candidate", ErrInvalidResult, ai.ErrInvalidProvenance)
+		}
 		if vr != nil {
 			if vr.Status != ai.VerificationStatusFail {
 				return db.AiAnalysis{}, fmt.Errorf("%w: failed verification status must be FAIL", ErrInvalidResult)
@@ -189,6 +200,9 @@ func (s *Service) FinalizeFailed(
 			}
 		}
 	} else {
+		if err := validateProvenance(provenance); err != nil {
+			return db.AiAnalysis{}, err
+		}
 		var err error
 		encoded, err = encodeCandidate(*valid)
 		if err != nil {
@@ -208,9 +222,18 @@ func (s *Service) FinalizeFailed(
 		if _, err := requireGenerating(ctx, q, analysisID, &workerAttemptID); err != nil {
 			return db.AiAnalysis{}, err
 		}
-		return q.FinalizeAnalysis(ctx, encoded.finalizeParams(
+		finalized, err := q.FinalizeAnalysis(ctx, encoded.finalizeParams(
 			analysisID, workerAttemptID, "FAILED", verificationStatus, notes,
 		))
+		if err != nil {
+			return db.AiAnalysis{}, err
+		}
+		if valid != nil {
+			if err := persistProvenance(ctx, q, analysisID, provenance); err != nil {
+				return db.AiAnalysis{}, err
+			}
+		}
+		return finalized, nil
 	})
 }
 
@@ -236,6 +259,20 @@ func (s *Service) Current(ctx context.Context, caseID pgtype.UUID) (db.AiAnalysi
 		return db.AiAnalysis{}, errors.New("analysis repository database is not configured")
 	}
 	return db.New(s.database).GetCurrentAnalysis(ctx, caseID)
+}
+
+func (s *Service) PolicyRefs(ctx context.Context, analysisID pgtype.UUID) ([]db.AnalysisPolicyRef, error) {
+	if s == nil || s.database == nil {
+		return nil, errors.New("analysis repository database is not configured")
+	}
+	return db.New(s.database).ListAnalysisPolicyRefs(ctx, analysisID)
+}
+
+func (s *Service) EvidenceRefs(ctx context.Context, analysisID pgtype.UUID) ([]db.AnalysisEvidenceRef, error) {
+	if s == nil || s.database == nil {
+		return nil, errors.New("analysis repository database is not configured")
+	}
+	return db.New(s.database).ListAnalysisEvidenceRefs(ctx, analysisID)
 }
 
 func (s *Service) inTx(
@@ -277,6 +314,55 @@ func requireGenerating(
 		return db.AiAnalysis{}, ErrStaleClaim
 	}
 	return attempt, nil
+}
+
+func validateProvenance(provenance *ai.AnalysisProvenance) error {
+	if err := provenance.Validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidResult, err)
+	}
+	return nil
+}
+
+func persistProvenance(
+	ctx context.Context,
+	q *db.Queries,
+	analysisID pgtype.UUID,
+	provenance *ai.AnalysisProvenance,
+) error {
+	if provenance == nil {
+		return nil
+	}
+	for _, ref := range provenance.PolicyRefs {
+		id, err := newUUID()
+		if err != nil {
+			return fmt.Errorf("generate analysis policy ref ID: %w", err)
+		}
+		if _, err := q.CreateAnalysisPolicyRef(ctx, db.CreateAnalysisPolicyRefParams{
+			ID:              id,
+			AnalysisID:      analysisID,
+			PolicyVersionID: ref.PolicyVersionID,
+			Section:         ref.Section,
+			Excerpt:         ref.Excerpt,
+			RelevanceScore:  ref.RelevanceScore,
+		}); err != nil {
+			return fmt.Errorf("create analysis policy ref: %w", err)
+		}
+	}
+	for _, ref := range provenance.EvidenceRefs {
+		id, err := newUUID()
+		if err != nil {
+			return fmt.Errorf("generate analysis evidence ref ID: %w", err)
+		}
+		if _, err := q.CreateAnalysisEvidenceRef(ctx, db.CreateAnalysisEvidenceRefParams{
+			ID:         id,
+			AnalysisID: analysisID,
+			EvidenceID: ref.EvidenceID,
+			UsageType:  string(ref.UsageType),
+		}); err != nil {
+			return fmt.Errorf("create analysis evidence ref: %w", err)
+		}
+	}
+	return nil
 }
 
 type encodedCandidate struct {

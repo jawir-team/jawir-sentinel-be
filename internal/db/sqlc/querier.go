@@ -17,6 +17,10 @@ type Querier interface {
 	CountActiveAdmins(context.Context) (int64, error)
 	CountActiveParticipantsByRole(context.Context, CountActiveParticipantsByRoleParams) (int64, error)
 	CreateAnalysis(context.Context, CreateAnalysisParams) (AiAnalysis, error)
+	// Hand-written (BE-032).
+	CreateAnalysisEvidenceRef(context.Context, CreateAnalysisEvidenceRefParams) (AnalysisEvidenceRef, error)
+	// Hand-written (BE-032).
+	CreateAnalysisPolicyRef(context.Context, CreateAnalysisPolicyRefParams) (AnalysisPolicyRef, error)
 	CreateCase(context.Context, CreateCaseParams) (Case, error)
 	CreateCaseParticipant(context.Context, CreateCaseParticipantParams) (CaseParticipant, error)
 	CreateCaseType(context.Context, CreateCaseTypeParams) (CaseType, error)
@@ -52,6 +56,10 @@ type Querier interface {
 	GetUserByFirebaseUID(context.Context, string) (User, error)
 	GetUserForUpdate(context.Context, pgtype.UUID) (User, error)
 	IsActiveCaseParticipant(context.Context, IsActiveCaseParticipantParams) (bool, error)
+	// Hand-written (BE-032).
+	ListAnalysisEvidenceRefs(context.Context, pgtype.UUID) ([]AnalysisEvidenceRef, error)
+	// Hand-written (BE-032).
+	ListAnalysisPolicyRefs(context.Context, pgtype.UUID) ([]AnalysisPolicyRef, error)
 	ListCaseAuditEvents(context.Context, pgtype.UUID) ([]AuditEvent, error)
 	ListCaseEvidences(context.Context, pgtype.UUID) ([]CaseEvidence, error)
 	ListCaseParticipants(context.Context, pgtype.UUID) ([]CaseParticipant, error)

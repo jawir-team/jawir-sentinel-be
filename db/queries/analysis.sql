@@ -176,3 +176,25 @@ SELECT a.id, a.case_id, a.version, a.status, a.technical_retry_count,
 FROM cases c
 JOIN ai_analyses a ON a.id = c.current_analysis_id
 WHERE c.id = $1;
+
+-- name: CreateAnalysisPolicyRef :one
+INSERT INTO analysis_policy_refs (id, analysis_id, policy_version_id, section, excerpt, relevance_score)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, analysis_id, policy_version_id, section, excerpt, relevance_score, created_at;
+
+-- name: CreateAnalysisEvidenceRef :one
+INSERT INTO analysis_evidence_refs (id, analysis_id, evidence_id, usage_type)
+VALUES ($1, $2, $3, $4)
+RETURNING id, analysis_id, evidence_id, usage_type, created_at;
+
+-- name: ListAnalysisPolicyRefs :many
+SELECT id, analysis_id, policy_version_id, section, excerpt, relevance_score, created_at
+FROM analysis_policy_refs
+WHERE analysis_id = $1
+ORDER BY created_at ASC, id ASC;
+
+-- name: ListAnalysisEvidenceRefs :many
+SELECT id, analysis_id, evidence_id, usage_type, created_at
+FROM analysis_evidence_refs
+WHERE analysis_id = $1
+ORDER BY created_at ASC, id ASC;

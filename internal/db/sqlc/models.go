@@ -149,6 +149,26 @@ type AiAnalysis struct {
 	CreatedAt           time.Time          `json:"created_at"`
 }
 
+// Hand-written (BE-032).
+type AnalysisPolicyRef struct {
+	ID              pgtype.UUID    `json:"id"`
+	AnalysisID      pgtype.UUID    `json:"analysis_id"`
+	PolicyVersionID pgtype.UUID    `json:"policy_version_id"`
+	Section         pgtype.Text    `json:"section"`
+	Excerpt         pgtype.Text    `json:"excerpt"`
+	RelevanceScore  pgtype.Numeric `json:"relevance_score"`
+	CreatedAt       time.Time      `json:"created_at"`
+}
+
+// Hand-written (BE-032).
+type AnalysisEvidenceRef struct {
+	ID         pgtype.UUID `json:"id"`
+	AnalysisID pgtype.UUID `json:"analysis_id"`
+	EvidenceID pgtype.UUID `json:"evidence_id"`
+	UsageType  string      `json:"usage_type"`
+	CreatedAt  time.Time   `json:"created_at"`
+}
+
 type Decision struct {
 	ID         pgtype.UUID `json:"id"`
 	CaseID     pgtype.UUID `json:"case_id"`

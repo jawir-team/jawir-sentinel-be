@@ -69,7 +69,7 @@ func TestAnalysisLifecyclePersistence(t *testing.T) {
 		}
 		assertInitialGenerating(t, attempt)
 
-		failed, err := service.FinalizeFailed(ctx, attempt.ID, attempt.WorkerAttemptID, nil, nil)
+		failed, err := service.FinalizeFailed(ctx, attempt.ID, attempt.WorkerAttemptID, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +90,7 @@ func TestAnalysisLifecyclePersistence(t *testing.T) {
 		}
 		completed, err := service.FinalizeCompleted(ctx, v1.ID, v1.WorkerAttemptID, validCandidate(), ai.VerificationResult{
 			Status: ai.VerificationStatusPass,
-		})
+		}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +112,7 @@ func TestAnalysisLifecyclePersistence(t *testing.T) {
 		if v2.Version != 2 {
 			t.Fatalf("v2 version = %d", v2.Version)
 		}
-		if _, err := service.FinalizeFailed(ctx, v2.ID, v2.WorkerAttemptID, nil, nil); err != nil {
+		if _, err := service.FinalizeFailed(ctx, v2.ID, v2.WorkerAttemptID, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		current, err = service.Current(ctx, caseID)
@@ -144,7 +144,7 @@ func TestAnalysisLifecyclePersistence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := service.FinalizeCompleted(ctx, currentAttempt.ID, currentAttempt.WorkerAttemptID, validCandidate(), ai.VerificationResult{Status: ai.VerificationStatusPass}); err != nil {
+		if _, err := service.FinalizeCompleted(ctx, currentAttempt.ID, currentAttempt.WorkerAttemptID, validCandidate(), ai.VerificationResult{Status: ai.VerificationStatusPass}, nil); err != nil {
 			t.Fatal(err)
 		}
 		attempt, err := service.BeginAttempt(ctx, caseID, "test-model", "prompt-v2")
@@ -161,7 +161,7 @@ func TestAnalysisLifecyclePersistence(t *testing.T) {
 				RelatedRefs: []string{},
 			}},
 		}
-		failed, err := service.FinalizeFailed(ctx, attempt.ID, attempt.WorkerAttemptID, &candidate, vr)
+		failed, err := service.FinalizeFailed(ctx, attempt.ID, attempt.WorkerAttemptID, &candidate, vr, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -223,7 +223,7 @@ func TestAnalysisLifecyclePersistence(t *testing.T) {
 		if reclaimed.TechnicalRetryCount != 1 || reclaimed.WorkerAttemptID == retried.WorkerAttemptID {
 			t.Fatalf("reclaimed = %+v", reclaimed)
 		}
-		_, err = service.FinalizeCompleted(ctx, initial.ID, retried.WorkerAttemptID, validCandidate(), ai.VerificationResult{Status: ai.VerificationStatusPass})
+		_, err = service.FinalizeCompleted(ctx, initial.ID, retried.WorkerAttemptID, validCandidate(), ai.VerificationResult{Status: ai.VerificationStatusPass}, nil)
 		if !errors.Is(err, ErrStaleClaim) {
 			t.Fatalf("old claim FinalizeCompleted() error = %v, want ErrStaleClaim", err)
 		}
@@ -232,10 +232,10 @@ func TestAnalysisLifecyclePersistence(t *testing.T) {
 			t.Fatalf("old claim RetryAttempt() error = %v, want ErrStaleClaim", err)
 		}
 
-		if _, err := service.FinalizeCompleted(ctx, initial.ID, reclaimed.WorkerAttemptID, validCandidate(), ai.VerificationResult{Status: ai.VerificationStatusPass}); err != nil {
+		if _, err := service.FinalizeCompleted(ctx, initial.ID, reclaimed.WorkerAttemptID, validCandidate(), ai.VerificationResult{Status: ai.VerificationStatusPass}, nil); err != nil {
 			t.Fatal(err)
 		}
-		_, err = service.FinalizeCompleted(ctx, initial.ID, reclaimed.WorkerAttemptID, validCandidate(), ai.VerificationResult{Status: ai.VerificationStatusPass})
+		_, err = service.FinalizeCompleted(ctx, initial.ID, reclaimed.WorkerAttemptID, validCandidate(), ai.VerificationResult{Status: ai.VerificationStatusPass}, nil)
 		if !errors.Is(err, ErrImmutable) {
 			t.Fatalf("second FinalizeCompleted() error = %v, want ErrImmutable", err)
 		}
