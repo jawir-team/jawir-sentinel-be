@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -18,23 +20,29 @@ import (
 
 const (
 	executionEventStarted = "EXECUTION_STARTED"
+	executionEventSuccess = "EXECUTION_SUCCESS"
+	caseEventDone         = "CASE_DONE"
 	executionInProgress   = "IN_PROGRESS"
+	executionSuccess      = "SUCCESS"
 )
 
-// ExecutionTxQueries is the database boundary for starting an execution.
+// ExecutionTxQueries is the database boundary for execution lifecycle changes.
 type ExecutionTxQueries interface {
 	GetCaseForUpdate(context.Context, pgtype.UUID) (db.Case, error)
 	ListCaseParticipants(context.Context, pgtype.UUID) ([]db.CaseParticipant, error)
 	GetAnalysis(context.Context, pgtype.UUID) (db.AiAnalysis, error)
 	ListDecisionsByAnalysis(context.Context, pgtype.UUID) ([]db.Decision, error)
 	ExistsExecutionForCaseAnalysis(context.Context, db.ExistsExecutionForCaseAnalysisParams) (bool, error)
+	GetExecutionForUpdate(context.Context, pgtype.UUID) (db.Execution, error)
 	CreateExecution(context.Context, db.CreateExecutionParams) (db.Execution, error)
+	UpdateExecution(context.Context, db.UpdateExecutionParams) (db.Execution, error)
+	UpdateCaseStatus(context.Context, db.UpdateCaseStatusParams) (db.Case, error)
 	AppendCaseAuditEvent(context.Context, db.AppendCaseAuditEventParams) (db.AuditEvent, error)
 }
 
 var _ ExecutionTxQueries = (*db.Queries)(nil)
 
-// ExecutionStore starts an execution in one database transaction.
+// ExecutionStore applies an execution lifecycle change in one database transaction.
 type ExecutionStore interface {
 	RunExecutionTx(context.Context, func(context.Context, ExecutionTxQueries) error) error
 }
@@ -44,6 +52,17 @@ type startExecutionRequest struct {
 }
 
 type startExecutionResponse struct {
+	ID         string `json:"id"`
+	Status     string `json:"status"`
+	CaseStatus string `json:"case_status"`
+}
+
+type finalizeExecutionSuccessRequest struct {
+	ActionTaken string `json:"action_taken"`
+	Result      string `json:"result"`
+}
+
+type finalizeExecutionSuccessResponse struct {
 	ID         string `json:"id"`
 	Status     string `json:"status"`
 	CaseStatus string `json:"case_status"`
@@ -225,4 +244,208 @@ func runStartExecution(
 	}
 
 	return execution, stored.Status, nil
+}
+
+// FinalizeExecutionSuccess records a successful execution and completes its case.
+func FinalizeExecutionSuccess(store ExecutionStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := auth.FromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, httpapi.NewError(httpapi.CodeUnauthorized, "", nil))
+			return
+		}
+		if store == nil || isNilInterface(store) {
+			logging.With(r.Context()).Error("finalize execution success: store is not configured")
+			httpapi.WriteError(w, nil)
+			return
+		}
+
+		caseID, err := parseUserUUID(chi.URLParam(r, "id"))
+		if err != nil {
+			writeInvalidCaseRequest(w, "A valid case ID is required.")
+			return
+		}
+		executionID, err := parseUserUUID(chi.URLParam(r, "execution_id"))
+		if err != nil {
+			writeInvalidCaseRequest(w, "A valid execution ID is required.")
+			return
+		}
+		var request finalizeExecutionSuccessRequest
+		if err := decodeCaseRequest(w, r, &request); err != nil {
+			httpapi.WriteError(w, participantAPIError(httpapi.CodeInvalidRequest, "Invalid request body.", err))
+			return
+		}
+
+		var execution db.Execution
+		var caseStatus string
+		var apiErr *httpapi.APIError
+		txErr := store.RunExecutionTx(r.Context(), func(ctx context.Context, q ExecutionTxQueries) error {
+			execution, caseStatus, apiErr = runFinalizeExecutionSuccess(ctx, q, caseID, executionID, actor, request)
+			if apiErr != nil {
+				return apiErr
+			}
+			return nil
+		})
+		if apiErr != nil {
+			if apiErr.Code == httpapi.CodeInternalError {
+				logging.With(r.Context()).Error("finalize execution success", "case_id", caseID.String(), "execution_id", executionID.String(), "error", apiErr)
+			}
+			httpapi.WriteError(w, apiErr)
+			return
+		}
+		if txErr != nil {
+			var wrapped *httpapi.APIError
+			if errors.As(txErr, &wrapped) {
+				httpapi.WriteError(w, wrapped)
+				return
+			}
+			logging.With(r.Context()).Error("commit execution success", "case_id", caseID.String(), "execution_id", executionID.String(), "error", txErr)
+			httpapi.WriteError(w, nil)
+			return
+		}
+
+		httpapi.WriteJSON(w, http.StatusOK, httpapi.SuccessEnvelope{Data: finalizeExecutionSuccessResponse{
+			ID: execution.ID.String(), Status: execution.Status, CaseStatus: caseStatus,
+		}})
+	}
+}
+
+func runFinalizeExecutionSuccess(
+	ctx context.Context,
+	q ExecutionTxQueries,
+	caseID pgtype.UUID,
+	executionID pgtype.UUID,
+	actor auth.User,
+	request finalizeExecutionSuccessRequest,
+) (db.Execution, string, *httpapi.APIError) {
+	stored, err := q.GetCaseForUpdate(ctx, caseID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeCaseNotFound, "", nil)
+	}
+	if err != nil {
+		return db.Execution{}, "", participantInternalError(err)
+	}
+	if stored.Status != string(workflow.StateExecution) {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeInvalidStateTransition, "", nil)
+	}
+
+	execution, err := q.GetExecutionForUpdate(ctx, executionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeCaseNotFound, "Execution not found.", nil)
+	}
+	if err != nil {
+		return db.Execution{}, "", participantInternalError(err)
+	}
+	if execution.CaseID != caseID {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeCaseNotFound, "Execution not found.", nil)
+	}
+	if !stored.CurrentAnalysisID.Valid || execution.AnalysisID != stored.CurrentAnalysisID {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeStaleAnalysis, "execution is not for the current analysis", nil)
+	}
+	if execution.Status != executionInProgress {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeInvalidStateTransition, "execution already finalized", nil)
+	}
+	if actor.ID != execution.ExecuterID {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeForbidden, "", nil)
+	}
+
+	participants, err := q.ListCaseParticipants(ctx, caseID)
+	if err != nil {
+		return db.Execution{}, "", participantInternalError(err)
+	}
+	activeExecuter := false
+	for _, participant := range participants {
+		if participant.UserID == actor.ID && participant.Status == participantStatusActive && participant.Role == caseRoleExecuter {
+			activeExecuter = true
+			break
+		}
+	}
+	if !activeExecuter {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeForbidden, "", nil)
+	}
+
+	actionTaken := strings.TrimSpace(request.ActionTaken)
+	if actionTaken == "" {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeValidationError, "Action taken is required.", nil)
+	}
+	result := strings.TrimSpace(request.Result)
+	if result == "" {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeValidationError, "Result is required.", nil)
+	}
+
+	execution, err = q.UpdateExecution(ctx, db.UpdateExecutionParams{
+		ID:          executionID,
+		Status:      executionSuccess,
+		ActionTaken: pgtype.Text{String: actionTaken, Valid: true},
+		Result:      pgtype.Text{String: result, Valid: true},
+		Blocker:     pgtype.Text{},
+		CompletedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+	})
+	if err != nil {
+		return db.Execution{}, "", participantInternalError(err)
+	}
+
+	metadata, err := json.Marshal(struct {
+		ExecutionID string `json:"execution_id"`
+		ActionTaken string `json:"action_taken"`
+	}{ExecutionID: execution.ID.String(), ActionTaken: actionTaken})
+	if err != nil {
+		return db.Execution{}, "", participantInternalError(err)
+	}
+	if apiErr := appendExecutionAudit(ctx, q, caseID, execution.AnalysisID, actor, executionEventSuccess, metadata); apiErr != nil {
+		return db.Execution{}, "", apiErr
+	}
+
+	next, err := workflow.Transition(workflow.StateExecution, workflow.EventExecutionSuccess)
+	if workflow.IsInvalidTransition(err) {
+		return db.Execution{}, "", participantAPIError(httpapi.CodeInvalidStateTransition, "", err)
+	}
+	if err != nil {
+		return db.Execution{}, "", participantInternalError(err)
+	}
+	updatedCase, err := q.UpdateCaseStatus(ctx, db.UpdateCaseStatusParams{ID: caseID, Status: string(next)})
+	if err != nil {
+		return db.Execution{}, "", participantInternalError(err)
+	}
+	// DONE is terminal in the workflow, so the case is read-only after commit.
+	caseStatus := updatedCase.Status
+
+	doneMetadata, err := json.Marshal(struct {
+		ExecutionID string `json:"execution_id"`
+	}{ExecutionID: execution.ID.String()})
+	if err != nil {
+		return db.Execution{}, "", participantInternalError(err)
+	}
+	if apiErr := appendExecutionAudit(ctx, q, caseID, pgtype.UUID{}, actor, caseEventDone, doneMetadata); apiErr != nil {
+		return db.Execution{}, "", apiErr
+	}
+
+	return execution, caseStatus, nil
+}
+
+func appendExecutionAudit(
+	ctx context.Context,
+	q ExecutionTxQueries,
+	caseID pgtype.UUID,
+	analysisID pgtype.UUID,
+	actor auth.User,
+	eventType string,
+	metadata []byte,
+) *httpapi.APIError {
+	auditID, err := newUnitUUID()
+	if err != nil {
+		return participantInternalError(err)
+	}
+	if _, err := q.AppendCaseAuditEvent(ctx, db.AppendCaseAuditEventParams{
+		ID:         auditID,
+		CaseID:     caseID,
+		EventType:  eventType,
+		ActorID:    actor.ID,
+		ActorRole:  nullableWorkflowActorRole(caseRoleExecuter),
+		AnalysisID: analysisID,
+		Metadata:   metadata,
+	}); err != nil {
+		return participantInternalError(err)
+	}
+	return nil
 }
