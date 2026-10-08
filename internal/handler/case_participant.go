@@ -97,6 +97,7 @@ var (
 	_ CloseCaseStore       = (*TxQueries)(nil)
 	_ EvidenceStore        = (*TxQueries)(nil)
 	_ ExecutionStore       = (*TxQueries)(nil)
+	_ HistoryStore         = (*TxQueries)(nil)
 	_ IndexTxStore         = (*TxQueries)(nil)
 	_ SubmitCaseStore      = (*TxQueries)(nil)
 )
