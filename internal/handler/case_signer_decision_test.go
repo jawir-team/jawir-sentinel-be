@@ -312,7 +312,7 @@ func TestRecordSignerDecisionStaleAnalysis(t *testing.T) {
 	response, _, _ := serveSignerDecision(actor, queries, reanalysis.Queued,
 		`{"analysis_id":"00000000-0000-0000-0000-000000000007","decision":"APPROVE"}`)
 
-	assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeStaleAnalysis)
+	assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeInvalidStateTransition)
 }
 
 func TestRecordSignerDecisionCheckerCannotSign(t *testing.T) {

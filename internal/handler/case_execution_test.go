@@ -482,7 +482,7 @@ func TestFinalizeExecutionSuccessStaleAnalysis(t *testing.T) {
 
 	response, _ := serveFinalizeExecutionSuccess(actor, queries, `{"action_taken":"action completed","result":"worked"}`)
 
-	assertExecutionError(t, response, http.StatusConflict, httpapi.CodeStaleAnalysis)
+	assertExecutionError(t, response, http.StatusConflict, httpapi.CodeInvalidStateTransition)
 	assertNoExecutionFinalized(t, queries)
 }
 
@@ -650,7 +650,7 @@ func TestFinalizeExecutionResultStaleAnalysis(t *testing.T) {
 
 	response, _, _ := serveFinalizeExecutionResult(actor, queries, reanalysis.Queued, `{"outcome":"FAILED","action_taken":"retried","result":"failed","blocker":"dependency unavailable"}`)
 
-	assertExecutionError(t, response, http.StatusConflict, httpapi.CodeStaleAnalysis)
+	assertExecutionError(t, response, http.StatusConflict, httpapi.CodeInvalidStateTransition)
 	assertNoExecutionFinalized(t, queries)
 }
 

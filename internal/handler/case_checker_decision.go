@@ -361,8 +361,8 @@ func persistReviewerDecision(
 	if actorRole != config.actorRole {
 		return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeForbidden, "", nil)
 	}
-	if !stored.CurrentAnalysisID.Valid || stored.CurrentAnalysisID != request.analysisID {
-		return db.Case{}, nil, nil, db.Decision{}, participantAPIError(httpapi.CodeStaleAnalysis, "", nil)
+	if apiErr := requireCurrentAnalysis(stored, request.analysisID); apiErr != nil {
+		return db.Case{}, nil, nil, db.Decision{}, apiErr
 	}
 
 	decisions, err := q.ListDecisionsByAnalysis(ctx, request.analysisID)

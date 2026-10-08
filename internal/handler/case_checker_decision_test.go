@@ -475,13 +475,33 @@ func TestRecordCheckerDecisionDuplicate(t *testing.T) {
 	assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeConflict)
 }
 
+// True concurrent race testing requires a live database. Together with the
+// stale-analysis tests, this proves the validation and uniqueness fallback
+// that resolves the losing write.
+func TestRecordCheckerDecisionDoubleMutationUniqueViolation(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := checkerDecisionFixture(actor)
+	first, _, _ := serveCheckerDecision(actor, queries, reanalysis.Queued,
+		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"APPROVE"}`)
+	assertCheckerDecisionSuccess(t, first, "APPROVE", "SIGNING")
+
+	queries.createErr = &pgconn.PgError{Code: "23505", ConstraintName: "decisions_unique"}
+	second, _, _ := serveCheckerDecision(actor, queries, reanalysis.Queued,
+		`{"analysis_id":"00000000-0000-0000-0000-000000000005","decision":"APPROVE"}`)
+
+	assertCaseTypeAPIError(t, second, http.StatusConflict, httpapi.CodeConflict)
+	if queries.createCalls != 2 || queries.auditCalls != 1 {
+		t.Errorf("mutation calls = decision %d audit %d, want 2 and 1", queries.createCalls, queries.auditCalls)
+	}
+}
+
 func TestRecordCheckerDecisionStaleAnalysis(t *testing.T) {
 	actor := caseTestUser(auth.SystemRoleUser)
 	queries := checkerDecisionFixture(actor)
 	response, _, _ := serveCheckerDecision(actor, queries, reanalysis.Queued,
 		`{"analysis_id":"00000000-0000-0000-0000-000000000007","decision":"APPROVE"}`)
 
-	assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeStaleAnalysis)
+	assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeInvalidStateTransition)
 }
 
 func TestRecordCheckerDecisionInvalidDecision(t *testing.T) {

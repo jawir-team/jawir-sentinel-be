@@ -192,8 +192,8 @@ func runStartExecution(
 	if stored.OwnerID == actor.ID {
 		return db.Execution{}, "", participantAPIError(httpapi.CodeForbidden, "The case owner cannot execute their own case.", nil)
 	}
-	if !stored.CurrentAnalysisID.Valid || stored.CurrentAnalysisID != analysisID {
-		return db.Execution{}, "", participantAPIError(httpapi.CodeInvalidStateTransition, "Analysis is not the current analysis.", nil)
+	if apiErr := requireCurrentAnalysis(stored, analysisID); apiErr != nil {
+		return db.Execution{}, "", apiErr
 	}
 
 	analysis, err := q.GetAnalysis(ctx, analysisID)
@@ -364,8 +364,8 @@ func runFinalizeExecutionSuccess(
 	if execution.CaseID != caseID {
 		return db.Execution{}, "", participantAPIError(httpapi.CodeCaseNotFound, "Execution not found.", nil)
 	}
-	if !stored.CurrentAnalysisID.Valid || execution.AnalysisID != stored.CurrentAnalysisID {
-		return db.Execution{}, "", participantAPIError(httpapi.CodeStaleAnalysis, "execution is not for the current analysis", nil)
+	if apiErr := requireCurrentAnalysis(stored, execution.AnalysisID); apiErr != nil {
+		return db.Execution{}, "", apiErr
 	}
 	if execution.Status != executionInProgress {
 		return db.Execution{}, "", participantAPIError(httpapi.CodeInvalidStateTransition, "execution already finalized", nil)
@@ -607,8 +607,8 @@ func persistExecutionResult(
 	if execution.CaseID != caseID {
 		return db.Execution{}, participantAPIError(httpapi.CodeCaseNotFound, "Execution not found.", nil)
 	}
-	if !stored.CurrentAnalysisID.Valid || execution.AnalysisID != stored.CurrentAnalysisID {
-		return db.Execution{}, participantAPIError(httpapi.CodeStaleAnalysis, "execution is not for the current analysis", nil)
+	if apiErr := requireCurrentAnalysis(stored, execution.AnalysisID); apiErr != nil {
+		return db.Execution{}, apiErr
 	}
 	if execution.Status != executionInProgress {
 		return db.Execution{}, participantAPIError(httpapi.CodeInvalidStateTransition, "execution already finalized", nil)
