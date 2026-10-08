@@ -3,16 +3,20 @@ package handler_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jawir-team/jawir-sentinel-be/internal/auth"
 	db "github.com/jawir-team/jawir-sentinel-be/internal/db/sqlc"
 	"github.com/jawir-team/jawir-sentinel-be/internal/handler"
 	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
+	"github.com/jawir-team/jawir-sentinel-be/internal/reanalysis"
 	"github.com/jawir-team/jawir-sentinel-be/internal/workflow"
 )
 
@@ -31,6 +35,8 @@ type fakeExecutionQueries struct {
 	updateCalls     int
 	updateCaseArg   db.UpdateCaseStatusParams
 	updateCaseCalls int
+	evidenceArg     db.CreateEvidenceParams
+	evidenceCalls   int
 	auditArg        db.AppendCaseAuditEventParams
 	auditArgs       []db.AppendCaseAuditEventParams
 	auditCalls      int
@@ -84,6 +90,15 @@ func (f *fakeExecutionQueries) UpdateExecution(_ context.Context, arg db.UpdateE
 	return updated, nil
 }
 
+func (f *fakeExecutionQueries) CreateEvidence(_ context.Context, arg db.CreateEvidenceParams) (db.CaseEvidence, error) {
+	f.evidenceCalls++
+	f.evidenceArg = arg
+	return db.CaseEvidence{
+		ID: arg.ID, CaseID: arg.CaseID, SourceType: arg.SourceType, SourceUserID: arg.SourceUserID,
+		EvidenceType: arg.EvidenceType, Title: arg.Title, Content: arg.Content,
+	}, nil
+}
+
 func (f *fakeExecutionQueries) UpdateCaseStatus(_ context.Context, arg db.UpdateCaseStatusParams) (db.Case, error) {
 	f.updateCaseCalls++
 	f.updateCaseArg = arg
@@ -99,6 +114,20 @@ func (f *fakeExecutionQueries) AppendCaseAuditEvent(_ context.Context, arg db.Ap
 	return db.AuditEvent{}, nil
 }
 
+// The fake re-analysis orchestrator passes this query fake as db.DBTX. The
+// handler recognizes ExecutionTxQueries directly, so SQL-level calls are not expected.
+func (f *fakeExecutionQueries) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	panic("unexpected SQL Exec")
+}
+
+func (f *fakeExecutionQueries) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	panic("unexpected SQL Query")
+}
+
+func (f *fakeExecutionQueries) QueryRow(context.Context, string, ...any) pgx.Row {
+	panic("unexpected SQL QueryRow")
+}
+
 type fakeExecutionStore struct {
 	queries *fakeExecutionQueries
 	calls   int
@@ -109,6 +138,33 @@ var _ handler.ExecutionStore = (*fakeExecutionStore)(nil)
 func (f *fakeExecutionStore) RunExecutionTx(ctx context.Context, fn func(context.Context, handler.ExecutionTxQueries) error) error {
 	f.calls++
 	return fn(ctx, f.queries)
+}
+
+type fakeExecutionReanalysis struct {
+	queries *fakeExecutionQueries
+	outcome reanalysis.Outcome
+	calls   int
+	request reanalysis.Request
+}
+
+var _ handler.ReanalysisOrchestrator = (*fakeExecutionReanalysis)(nil)
+
+func (f *fakeExecutionReanalysis) Run(ctx context.Context, request reanalysis.Request, persist reanalysis.PersistAction) (reanalysis.Result, error) {
+	f.calls++
+	f.request = request
+	if err := persist(ctx, f.queries, f.queries.caseResult); err != nil {
+		return reanalysis.Result{}, fmt.Errorf("persist reanalysis trigger: %w", err)
+	}
+	resultCase := f.queries.caseResult
+	switch f.outcome {
+	case reanalysis.Queued:
+		resultCase.Status = string(workflow.StateAIAnalysis)
+	case reanalysis.LimitReached:
+		resultCase.Status = string(workflow.StateEscalationRequired)
+	default:
+		return reanalysis.Result{}, fmt.Errorf("unexpected fake outcome %q", f.outcome)
+	}
+	return reanalysis.Result{Outcome: f.outcome, Case: resultCase}, nil
 }
 
 func executionFixture(actor auth.User) *fakeExecutionQueries {
@@ -443,7 +499,170 @@ func TestFinalizeExecutionSuccessDifferentCase(t *testing.T) {
 
 func assertNoExecutionFinalized(t *testing.T, queries *fakeExecutionQueries) {
 	t.Helper()
-	if queries.updateCalls != 0 || queries.updateCaseCalls != 0 || queries.auditCalls != 0 {
-		t.Fatalf("side effects = execution updates %d case updates %d audits %d; want zero", queries.updateCalls, queries.updateCaseCalls, queries.auditCalls)
+	if queries.updateCalls != 0 || queries.updateCaseCalls != 0 || queries.evidenceCalls != 0 || queries.auditCalls != 0 {
+		t.Fatalf("side effects = execution updates %d case updates %d evidences %d audits %d; want zero", queries.updateCalls, queries.updateCaseCalls, queries.evidenceCalls, queries.auditCalls)
 	}
+}
+
+func serveFinalizeExecutionResult(actor auth.User, queries *fakeExecutionQueries, outcome reanalysis.Outcome, body string) (*httptest.ResponseRecorder, *fakeExecutionStore, *fakeExecutionReanalysis) {
+	store := &fakeExecutionStore{queries: queries}
+	orchestrator := &fakeExecutionReanalysis{queries: queries, outcome: outcome}
+	request := caseRequestWithID(
+		http.MethodPost,
+		"/api/v1/cases/00000000-0000-0000-0000-000000000004/executions/00000000-0000-0000-0000-00000000000c/result",
+		handlerTestUUID(4).String(),
+		body,
+		&actor,
+	)
+	chi.RouteContext(request.Context()).URLParams.Add("execution_id", queries.executionResult.ID.String())
+	response := httptest.NewRecorder()
+	handler.FinalizeExecutionResult(handler.ExecutionResultDecider{Store: store, Reanalysis: orchestrator}).ServeHTTP(response, request)
+	return response, store, orchestrator
+}
+
+func assertExecutionResultSuccess(t *testing.T, response *httptest.ResponseRecorder, queries *fakeExecutionQueries, outcome, caseStatus string) {
+	t.Helper()
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data struct {
+			ExecutionID string `json:"execution_id"`
+			Outcome     string `json:"outcome"`
+			CaseStatus  string `json:"case_status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Data.ExecutionID != queries.executionResult.ID.String() || body.Data.Outcome != outcome || body.Data.CaseStatus != caseStatus {
+		t.Errorf("response data = %+v", body.Data)
+	}
+}
+
+func assertExecutionResultSideEffects(t *testing.T, queries *fakeExecutionQueries, actor auth.User, outcome string) {
+	t.Helper()
+	if queries.updateCalls != 1 || queries.updateArg.Status != outcome || !queries.updateArg.CompletedAt.Valid {
+		t.Errorf("execution update = calls %d arg %+v", queries.updateCalls, queries.updateArg)
+	}
+	if queries.evidenceCalls != 1 {
+		t.Fatalf("evidence calls = %d, want 1", queries.evidenceCalls)
+	}
+	if queries.evidenceArg.EvidenceType != "EXECUTION_RESULT" || queries.evidenceArg.SourceType != "EXECUTER" || queries.evidenceArg.SourceUserID != actor.ID || !queries.evidenceArg.Title.Valid || queries.evidenceArg.Title.String != "Execution "+outcome || !queries.evidenceArg.Content.Valid {
+		t.Errorf("evidence arg = %+v", queries.evidenceArg)
+	}
+	if queries.auditCalls != 1 || queries.auditArg.EventType != "EXECUTION_"+outcome || queries.auditArg.ActorID != actor.ID || !queries.auditArg.ActorRole.Valid || queries.auditArg.ActorRole.String != "EXECUTER" || queries.auditArg.AnalysisID != queries.executionResult.AnalysisID {
+		t.Errorf("audit = calls %d arg %+v", queries.auditCalls, queries.auditArg)
+	}
+	var metadata struct {
+		ExecutionID string `json:"execution_id"`
+		Outcome     string `json:"outcome"`
+	}
+	if err := json.Unmarshal(queries.auditArg.Metadata, &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	if metadata.ExecutionID != queries.executionResult.ID.String() || metadata.Outcome != outcome {
+		t.Errorf("audit metadata = %+v", metadata)
+	}
+}
+
+func TestFinalizeExecutionResultBlockedValid(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := executionFixture(actor)
+
+	response, store, orchestrator := serveFinalizeExecutionResult(actor, queries, reanalysis.Queued, `{"outcome":" blocked ","blocker":"  upstream unavailable  "}`)
+
+	assertExecutionResultSuccess(t, response, queries, "BLOCKED", "AI_ANALYSIS")
+	if store.calls != 0 {
+		t.Errorf("handler-owned transaction calls = %d, want 0", store.calls)
+	}
+	if orchestrator.calls != 1 || orchestrator.request.Trigger != workflow.EventExecutionBlocked || orchestrator.request.ActorID != actor.ID || orchestrator.request.ActorRole != "EXECUTER" {
+		t.Errorf("orchestrator = calls %d request %+v", orchestrator.calls, orchestrator.request)
+	}
+	assertExecutionResultSideEffects(t, queries, actor, "BLOCKED")
+	if queries.updateArg.ActionTaken.Valid || queries.updateArg.Result.Valid || !queries.updateArg.Blocker.Valid || queries.updateArg.Blocker.String != "upstream unavailable" {
+		t.Errorf("blocked update fields = %+v", queries.updateArg)
+	}
+}
+
+func TestFinalizeExecutionResultFailedValid(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := executionFixture(actor)
+
+	response, _, orchestrator := serveFinalizeExecutionResult(actor, queries, reanalysis.Queued, `{"outcome":"FAILED","action_taken":" retried ","result":" retry failed ","blocker":" dependency unavailable "}`)
+
+	assertExecutionResultSuccess(t, response, queries, "FAILED", "AI_ANALYSIS")
+	if orchestrator.calls != 1 || orchestrator.request.Trigger != workflow.EventExecutionFailed {
+		t.Errorf("orchestrator = calls %d request %+v", orchestrator.calls, orchestrator.request)
+	}
+	assertExecutionResultSideEffects(t, queries, actor, "FAILED")
+	if !queries.updateArg.ActionTaken.Valid || queries.updateArg.ActionTaken.String != "retried" || !queries.updateArg.Result.Valid || queries.updateArg.Result.String != "retry failed" || !queries.updateArg.Blocker.Valid || queries.updateArg.Blocker.String != "dependency unavailable" {
+		t.Errorf("failed update fields = %+v", queries.updateArg)
+	}
+}
+
+func TestFinalizeExecutionResultBlockedMissingBlocker(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := executionFixture(actor)
+
+	response, _, _ := serveFinalizeExecutionResult(actor, queries, reanalysis.Queued, `{"outcome":"BLOCKED","blocker":"  "}`)
+
+	assertExecutionError(t, response, http.StatusBadRequest, httpapi.CodeValidationError)
+	assertNoExecutionFinalized(t, queries)
+}
+
+func TestFinalizeExecutionResultFailedMissingResult(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := executionFixture(actor)
+
+	response, _, _ := serveFinalizeExecutionResult(actor, queries, reanalysis.Queued, `{"outcome":"FAILED","action_taken":"retried","result":" ","blocker":"dependency unavailable"}`)
+
+	assertExecutionError(t, response, http.StatusBadRequest, httpapi.CodeValidationError)
+	assertNoExecutionFinalized(t, queries)
+}
+
+func TestFinalizeExecutionResultWrongActor(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := executionFixture(actor)
+	queries.executionResult.ExecuterID = handlerTestUUID(13)
+
+	response, _, _ := serveFinalizeExecutionResult(actor, queries, reanalysis.Queued, `{"outcome":"BLOCKED","blocker":"upstream unavailable"}`)
+
+	assertExecutionError(t, response, http.StatusForbidden, httpapi.CodeForbidden)
+	assertNoExecutionFinalized(t, queries)
+}
+
+func TestFinalizeExecutionResultAlreadyFinalized(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := executionFixture(actor)
+	queries.executionResult.Status = "BLOCKED"
+
+	response, _, _ := serveFinalizeExecutionResult(actor, queries, reanalysis.Queued, `{"outcome":"BLOCKED","blocker":"upstream unavailable"}`)
+
+	assertExecutionError(t, response, http.StatusConflict, httpapi.CodeInvalidStateTransition)
+	assertNoExecutionFinalized(t, queries)
+}
+
+func TestFinalizeExecutionResultStaleAnalysis(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := executionFixture(actor)
+	queries.executionResult.AnalysisID = handlerTestUUID(6)
+
+	response, _, _ := serveFinalizeExecutionResult(actor, queries, reanalysis.Queued, `{"outcome":"FAILED","action_taken":"retried","result":"failed","blocker":"dependency unavailable"}`)
+
+	assertExecutionError(t, response, http.StatusConflict, httpapi.CodeStaleAnalysis)
+	assertNoExecutionFinalized(t, queries)
+}
+
+func TestFinalizeExecutionResultQuotaExhaustedPersists(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleUser)
+	queries := executionFixture(actor)
+
+	response, _, orchestrator := serveFinalizeExecutionResult(actor, queries, reanalysis.LimitReached, `{"outcome":"BLOCKED","action_taken":"retried","result":"still blocked","blocker":"upstream unavailable"}`)
+
+	assertExecutionResultSuccess(t, response, queries, "BLOCKED", "ESCALATION_REQUIRED")
+	if orchestrator.calls != 1 || orchestrator.request.Trigger != workflow.EventExecutionBlocked {
+		t.Errorf("orchestrator = calls %d request %+v", orchestrator.calls, orchestrator.request)
+	}
+	assertExecutionResultSideEffects(t, queries, actor, "BLOCKED")
 }
