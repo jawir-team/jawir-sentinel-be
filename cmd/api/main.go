@@ -126,6 +126,8 @@ func newServerWithStores(
 	protected.With(auth.RequireAuth).Post("/v1/cases", handler.CreateCase(caseStore))
 	protected.With(auth.RequireAuth).Get("/v1/cases/{id}", handler.GetCase(caseStore))
 	protected.With(auth.RequireAuth).Patch("/v1/cases/{id}", handler.UpdateCase(caseStore))
+	dashboardStore, _ := caseStore.(handler.DashboardStore)
+	protected.With(auth.RequireAuth).Get("/v1/dashboard/summary", handler.GetDashboardSummary(dashboardStore))
 	historyStore, _ := caseParticipantStore.(handler.HistoryStore)
 	protected.With(auth.RequireAuth).Get("/v1/cases/{id}/history", handler.GetCaseHistory(historyStore))
 	submitCaseStore, _ := caseParticipantStore.(handler.SubmitCaseStore)
