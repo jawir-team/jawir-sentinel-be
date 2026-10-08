@@ -37,6 +37,7 @@ type Querier interface {
 	CreateUser(context.Context, CreateUserParams) (User, error)
 	DeletePolicyChunks(context.Context, pgtype.UUID) error
 	ExistsGeneratingAnalysis(context.Context, pgtype.UUID) (bool, error)
+	ExistsExecutionForCaseAnalysis(context.Context, ExistsExecutionForCaseAnalysisParams) (bool, error)
 	ExistsRunningExecution(context.Context, pgtype.UUID) (bool, error)
 	GetActiveParticipantForUpdate(context.Context, pgtype.UUID) (CaseParticipant, error)
 	GetActivePolicyVersion(context.Context, pgtype.UUID) (PolicyVersion, error)

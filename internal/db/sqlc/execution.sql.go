@@ -39,6 +39,26 @@ func (q *Queries) ExistsRunningExecution(ctx context.Context, caseID pgtype.UUID
 	return exists, err
 }
 
+// Hand-written for BE-041 because sqlc is not available in the build sandbox.
+const existsExecutionForCaseAnalysis = `-- name: ExistsExecutionForCaseAnalysis :one
+SELECT EXISTS(
+    SELECT 1
+    FROM executions
+    WHERE case_id = $1 AND analysis_id = $2
+)`
+
+type ExistsExecutionForCaseAnalysisParams struct {
+	CaseID     pgtype.UUID
+	AnalysisID pgtype.UUID
+}
+
+func (q *Queries) ExistsExecutionForCaseAnalysis(ctx context.Context, arg ExistsExecutionForCaseAnalysisParams) (bool, error) {
+	row := q.dbx.QueryRow(ctx, existsExecutionForCaseAnalysis, arg.CaseID, arg.AnalysisID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const getExecutionForUpdate = `-- name: GetExecutionForUpdate :one
 SELECT id, case_id, analysis_id, executer_id, status, action_taken, result,
        blocker, started_at, completed_at, created_at
