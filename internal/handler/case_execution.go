@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jawir-team/jawir-sentinel-be/internal/audit"
 	"github.com/jawir-team/jawir-sentinel-be/internal/auth"
 	db "github.com/jawir-team/jawir-sentinel-be/internal/db/sqlc"
 	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
@@ -32,9 +33,9 @@ const (
 
 // ExecutionTxQueries is the database boundary for execution lifecycle changes.
 type ExecutionTxQueries interface {
+	audit.Queries
 	GetCaseForUpdate(context.Context, pgtype.UUID) (db.Case, error)
 	ListCaseParticipants(context.Context, pgtype.UUID) ([]db.CaseParticipant, error)
-	GetAnalysis(context.Context, pgtype.UUID) (db.AiAnalysis, error)
 	ListDecisionsByAnalysis(context.Context, pgtype.UUID) ([]db.Decision, error)
 	ExistsExecutionForCaseAnalysis(context.Context, db.ExistsExecutionForCaseAnalysisParams) (bool, error)
 	GetExecutionForUpdate(context.Context, pgtype.UUID) (db.Execution, error)
@@ -42,7 +43,6 @@ type ExecutionTxQueries interface {
 	UpdateExecution(context.Context, db.UpdateExecutionParams) (db.Execution, error)
 	CreateEvidence(context.Context, db.CreateEvidenceParams) (db.CaseEvidence, error)
 	UpdateCaseStatus(context.Context, db.UpdateCaseStatusParams) (db.Case, error)
-	AppendCaseAuditEvent(context.Context, db.AppendCaseAuditEventParams) (db.AuditEvent, error)
 }
 
 var _ ExecutionTxQueries = (*db.Queries)(nil)
@@ -252,12 +252,7 @@ func runStartExecution(
 	if err != nil {
 		return db.Execution{}, "", participantInternalError(err)
 	}
-	auditID, err := newUnitUUID()
-	if err != nil {
-		return db.Execution{}, "", participantInternalError(err)
-	}
-	if _, err := q.AppendCaseAuditEvent(ctx, db.AppendCaseAuditEventParams{
-		ID:         auditID,
+	if _, err := audit.AppendCaseEvent(ctx, q, audit.CaseEvent{
 		CaseID:     caseID,
 		EventType:  executionEventStarted,
 		ActorID:    actor.ID,

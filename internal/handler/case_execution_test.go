@@ -56,6 +56,10 @@ func (f *fakeExecutionQueries) GetAnalysis(context.Context, pgtype.UUID) (db.AiA
 	return f.analysisResult, nil
 }
 
+func (f *fakeExecutionQueries) GetPolicyVersion(context.Context, pgtype.UUID) (db.PolicyVersion, error) {
+	return db.PolicyVersion{}, nil
+}
+
 func (f *fakeExecutionQueries) ListDecisionsByAnalysis(context.Context, pgtype.UUID) ([]db.Decision, error) {
 	return f.decisions, nil
 }
@@ -111,6 +115,10 @@ func (f *fakeExecutionQueries) AppendCaseAuditEvent(_ context.Context, arg db.Ap
 	f.auditCalls++
 	f.auditArg = arg
 	f.auditArgs = append(f.auditArgs, arg)
+	return db.AuditEvent{}, nil
+}
+
+func (f *fakeExecutionQueries) AppendPolicyAuditEvent(context.Context, db.AppendPolicyAuditEventParams) (db.AuditEvent, error) {
 	return db.AuditEvent{}, nil
 }
 

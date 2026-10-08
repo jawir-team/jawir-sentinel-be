@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jawir-team/jawir-sentinel-be/internal/audit"
 	"github.com/jawir-team/jawir-sentinel-be/internal/auth"
 	db "github.com/jawir-team/jawir-sentinel-be/internal/db/sqlc"
 	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
@@ -23,9 +24,9 @@ const (
 
 // PolicyStore is the database boundary needed by the policy collection handlers.
 type PolicyStore interface {
+	audit.Queries
 	ListPolicies(context.Context) ([]db.Policy, error)
 	CreatePolicy(context.Context, db.CreatePolicyParams) (db.Policy, error)
-	AppendPolicyAuditEvent(context.Context, db.AppendPolicyAuditEventParams) (db.AuditEvent, error)
 }
 
 var _ PolicyStore = (*db.Queries)(nil)
@@ -153,14 +154,7 @@ func CreatePolicy(store PolicyStore) http.HandlerFunc {
 			return
 		}
 
-		auditID, err := newUnitUUID()
-		if err != nil {
-			logging.With(r.Context()).Error("generate policy audit event ID", "policy_id", created.ID.String(), "error", err)
-			httpapi.WriteError(w, nil)
-			return
-		}
-		if _, err := store.AppendPolicyAuditEvent(r.Context(), db.AppendPolicyAuditEventParams{
-			ID:        auditID,
+		if _, err := audit.AppendPolicyEvent(r.Context(), store, audit.PolicyEvent{
 			PolicyID:  created.ID,
 			EventType: policyEventCreated,
 			ActorID:   actor.ID,

@@ -43,6 +43,18 @@ func (f *fakePolicyAPIStore) CreatePolicy(_ context.Context, arg db.CreatePolicy
 	return f.createdPolicy, f.createErr
 }
 
+func (f *fakePolicyAPIStore) GetAnalysis(context.Context, pgtype.UUID) (db.AiAnalysis, error) {
+	return db.AiAnalysis{}, nil
+}
+
+func (f *fakePolicyAPIStore) GetPolicyVersion(context.Context, pgtype.UUID) (db.PolicyVersion, error) {
+	return db.PolicyVersion{}, nil
+}
+
+func (f *fakePolicyAPIStore) AppendCaseAuditEvent(context.Context, db.AppendCaseAuditEventParams) (db.AuditEvent, error) {
+	return db.AuditEvent{}, nil
+}
+
 func (f *fakePolicyAPIStore) AppendPolicyAuditEvent(_ context.Context, arg db.AppendPolicyAuditEventParams) (db.AuditEvent, error) {
 	f.auditCalls++
 	f.auditArg = arg
