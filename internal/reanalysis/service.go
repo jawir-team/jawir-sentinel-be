@@ -80,13 +80,23 @@ type Result struct {
 	Outbox   *db.OutboxEvent
 }
 
-type transactionRunner interface {
+// TransactionRunner supplies the atomic persistence boundary used by Service.
+// It is exported so hermetic integration suites can run the real orchestration
+// logic while replacing only PostgreSQL.
+type TransactionRunner interface {
 	Run(context.Context, func(context.Context, Queries, db.DBTX) error) error
 }
 
 type Service struct {
-	runner        transactionRunner
+	runner        TransactionRunner
 	maxReanalysis int32
+}
+
+// NewWithRunner constructs a service with an explicit transaction boundary
+// and quota. It is primarily useful for integration tests and alternate
+// durable stores; maxReanalysis must be non-negative.
+func NewWithRunner(runner TransactionRunner, maxReanalysis int32) *Service {
+	return &Service{runner: runner, maxReanalysis: maxReanalysis}
 }
 
 // New creates an orchestrator using MAX_REANALYSIS. Missing, malformed, or

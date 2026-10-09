@@ -26,7 +26,11 @@ type Publisher interface {
 	Publish(context.Context, string, []byte) error
 }
 
-type txStore interface {
+// TxStore is the atomic outbox batch used by Dispatcher. PostgreSQL is the
+// production implementation; the exported seam also permits hermetic
+// integration tests to exercise dispatch semantics without a live broker or
+// database.
+type TxStore interface {
 	ListPending(context.Context, int32) ([]db.OutboxEvent, error)
 	MarkPublished(context.Context, pgtype.UUID, time.Time) error
 	RecordAttempt(context.Context, pgtype.UUID, string) error
@@ -34,8 +38,9 @@ type txStore interface {
 	Rollback(context.Context) error
 }
 
-type txFactory interface {
-	Begin(context.Context) (txStore, error)
+// TxFactory starts an outbox batch transaction.
+type TxFactory interface {
+	Begin(context.Context) (TxStore, error)
 }
 
 // Database is the transaction surface implemented by *pgxpool.Pool.
@@ -44,10 +49,21 @@ type Database interface {
 }
 
 type Dispatcher struct {
-	factory      txFactory
+	factory      TxFactory
 	publisher    Publisher
 	batchSize    int32
 	pollInterval time.Duration
+}
+
+// NewWithFactory constructs a dispatcher around an atomic store boundary.
+// Production code should normally use New.
+func NewWithFactory(factory TxFactory, publisher Publisher) *Dispatcher {
+	return &Dispatcher{
+		factory:      factory,
+		publisher:    publisher,
+		batchSize:    defaultBatchSize,
+		pollInterval: defaultPollInterval,
+	}
 }
 
 // New constructs a PostgreSQL-backed dispatcher.
@@ -195,7 +211,7 @@ func wait(ctx context.Context, duration time.Duration) error {
 
 type postgresFactory struct{ database Database }
 
-func (f postgresFactory) Begin(ctx context.Context) (txStore, error) {
+func (f postgresFactory) Begin(ctx context.Context) (TxStore, error) {
 	if f.database == nil {
 		return nil, errors.New("outbox dispatcher database is not configured")
 	}

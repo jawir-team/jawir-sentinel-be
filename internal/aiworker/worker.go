@@ -45,6 +45,28 @@ type Database interface {
 	Begin(context.Context) (pgx.Tx, error)
 }
 
+// StateQueries is the durable mutation surface used inside one worker
+// transaction. The production adapter delegates to sqlc and analysisrepo;
+// exposing the boundary lets integration tests replace only PostgreSQL while
+// retaining Worker as the authority for claims, fencing and workflow changes.
+type StateQueries interface {
+	GetAnalysisForUpdate(context.Context, pgtype.UUID) (db.AiAnalysis, error)
+	GetCaseForUpdate(context.Context, pgtype.UUID) (db.Case, error)
+	GetOutboxEvent(context.Context, pgtype.UUID) (db.OutboxEvent, error)
+	IsAnalysisClaimActive(context.Context, db.IsAnalysisClaimActiveParams) (bool, error)
+	ClaimAnalysis(context.Context, db.ClaimAnalysisParams) (db.AiAnalysis, error)
+	RetryAnalysis(context.Context, pgtype.UUID, pgtype.UUID) (db.AiAnalysis, error)
+	FinalizeCompleted(context.Context, pgtype.UUID, pgtype.UUID, SuccessResult) (db.AiAnalysis, error)
+	FinalizeFailed(context.Context, pgtype.UUID, pgtype.UUID, *FailedCandidate) (db.AiAnalysis, error)
+	AppendCaseAuditEvent(context.Context, db.AppendCaseAuditEventParams) (db.AuditEvent, error)
+	UpdateCaseStatus(context.Context, db.UpdateCaseStatusParams) (db.Case, error)
+}
+
+// StateStore runs a worker mutation atomically.
+type StateStore interface {
+	Run(context.Context, func(context.Context, StateQueries) error) error
+}
+
 // Outcome tells the message consumer whether it owns work and whether the
 // delivery can be acknowledged. Every returned non-error outcome is durable.
 type Outcome string
@@ -75,7 +97,7 @@ type FailedCandidate struct {
 }
 
 type Worker struct {
-	database     Database
+	store        StateStore
 	leaseSeconds float64
 }
 
@@ -87,10 +109,15 @@ func New(database Database) *Worker {
 
 // NewWithLeaseSeconds uses an already-validated process configuration value.
 func NewWithLeaseSeconds(database Database, leaseSeconds int) *Worker {
+	return NewWithStore(postgresStateStore{database: database}, leaseSeconds)
+}
+
+// NewWithStore constructs a worker around an explicit atomic state store.
+func NewWithStore(store StateStore, leaseSeconds int) *Worker {
 	if leaseSeconds <= 0 {
 		leaseSeconds = int(DefaultLeaseSeconds)
 	}
-	return &Worker{database: database, leaseSeconds: float64(leaseSeconds)}
+	return &Worker{store: store, leaseSeconds: float64(leaseSeconds)}
 }
 
 // Claim owns only the short database phase. It commits before returning
@@ -99,81 +126,60 @@ func (w *Worker) Claim(
 	ctx context.Context,
 	caseID, analysisID, outboxEventID pgtype.UUID,
 ) (ClaimResult, error) {
-	if w == nil || w.database == nil {
+	if w == nil || w.store == nil {
 		return ClaimResult{}, ErrNotConfigured
 	}
 	if !validUUID(caseID) || !validUUID(analysisID) || !validUUID(outboxEventID) {
 		return ClaimResult{}, ErrInvalidMessage
 	}
 
-	tx, err := w.database.Begin(ctx)
-	if err != nil {
-		return ClaimResult{}, err
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	q := db.New(tx)
-
-	analysis, err := q.GetAnalysisForUpdate(ctx, analysisID)
-	if err != nil {
-		return ClaimResult{}, err
-	}
-	if !sameUUID(analysis.CaseID, caseID) {
-		return ClaimResult{}, ErrInvalidMessage
-	}
-	storedCase, err := q.GetCaseForUpdate(ctx, caseID)
-	if err != nil {
-		return ClaimResult{}, err
-	}
-	outbox, err := q.GetOutboxEvent(ctx, outboxEventID)
-	if err != nil {
-		return ClaimResult{}, err
-	}
-	if !sameUUID(outbox.CaseID, caseID) ||
-		!sameUUID(outbox.AnalysisID, analysisID) ||
-		outbox.EventType != outboxEventAnalysisRequested {
-		return ClaimResult{}, ErrInvalidMessage
-	}
-
-	if terminalAnalysis(analysis.Status) {
-		result := ClaimResult{Outcome: AlreadyFinalized, WorkerAttemptID: analysis.WorkerAttemptID, TechnicalRetryCount: analysis.TechnicalRetryCount}
-		if err := tx.Commit(ctx); err != nil {
-			return ClaimResult{}, err
+	var result ClaimResult
+	err := w.store.Run(ctx, func(ctx context.Context, q StateQueries) error {
+		analysis, err := q.GetAnalysisForUpdate(ctx, analysisID)
+		if err != nil {
+			return err
 		}
-		return result, nil
-	}
-	if analysis.Status != "GENERATING" || storedCase.Status != string(workflow.StateAIAnalysis) {
-		return ClaimResult{}, ErrStaleClaim
-	}
-
-	active, err := q.IsAnalysisClaimActive(ctx, db.IsAnalysisClaimActiveParams{
-		ID: analysisID, LeaseSeconds: w.leaseSeconds,
-	})
-	if err != nil {
-		return ClaimResult{}, err
-	}
-	if active {
-		result := ClaimResult{Outcome: Duplicate, WorkerAttemptID: analysis.WorkerAttemptID, TechnicalRetryCount: analysis.TechnicalRetryCount}
-		if err := tx.Commit(ctx); err != nil {
-			return ClaimResult{}, err
+		if !sameUUID(analysis.CaseID, caseID) {
+			return ErrInvalidMessage
 		}
-		return result, nil
-	}
-
-	workerAttemptID, err := newUUID()
-	if err != nil {
-		return ClaimResult{}, fmt.Errorf("generate worker attempt ID: %w", err)
-	}
-	claimed, err := q.ClaimAnalysis(ctx, db.ClaimAnalysisParams{
-		ID: analysisID, WorkerAttemptID: workerAttemptID, CaseID: caseID,
+		storedCase, err := q.GetCaseForUpdate(ctx, caseID)
+		if err != nil {
+			return err
+		}
+		outbox, err := q.GetOutboxEvent(ctx, outboxEventID)
+		if err != nil {
+			return err
+		}
+		if !sameUUID(outbox.CaseID, caseID) || !sameUUID(outbox.AnalysisID, analysisID) || outbox.EventType != outboxEventAnalysisRequested {
+			return ErrInvalidMessage
+		}
+		if terminalAnalysis(analysis.Status) {
+			result = ClaimResult{Outcome: AlreadyFinalized, WorkerAttemptID: analysis.WorkerAttemptID, TechnicalRetryCount: analysis.TechnicalRetryCount}
+			return nil
+		}
+		if analysis.Status != "GENERATING" || storedCase.Status != string(workflow.StateAIAnalysis) {
+			return ErrStaleClaim
+		}
+		active, err := q.IsAnalysisClaimActive(ctx, db.IsAnalysisClaimActiveParams{ID: analysisID, LeaseSeconds: w.leaseSeconds})
+		if err != nil {
+			return err
+		}
+		if active {
+			result = ClaimResult{Outcome: Duplicate, WorkerAttemptID: analysis.WorkerAttemptID, TechnicalRetryCount: analysis.TechnicalRetryCount}
+			return nil
+		}
+		workerAttemptID, err := newUUID()
+		if err != nil {
+			return fmt.Errorf("generate worker attempt ID: %w", err)
+		}
+		claimed, err := q.ClaimAnalysis(ctx, db.ClaimAnalysisParams{ID: analysisID, WorkerAttemptID: workerAttemptID, CaseID: caseID})
+		if err != nil {
+			return err
+		}
+		result = ClaimResult{Outcome: Claimed, WorkerAttemptID: claimed.WorkerAttemptID, TechnicalRetryCount: claimed.TechnicalRetryCount}
+		return nil
 	})
-	if err != nil {
-		return ClaimResult{}, err
-	}
-	result := ClaimResult{Outcome: Claimed, WorkerAttemptID: claimed.WorkerAttemptID, TechnicalRetryCount: claimed.TechnicalRetryCount}
-	if err := tx.Commit(ctx); err != nil {
-		return ClaimResult{}, err
-	}
-	return result, nil
+	return result, err
 }
 
 // FinalizeSuccess atomically stores the verified result and provenance,
@@ -210,10 +216,16 @@ func (w *Worker) TechnicalRetry(
 	ctx context.Context,
 	analysisID, workerAttemptID pgtype.UUID,
 ) (db.AiAnalysis, error) {
-	if w == nil || w.database == nil {
+	if w == nil || w.store == nil {
 		return db.AiAnalysis{}, ErrNotConfigured
 	}
-	return analysisrepo.New(w.database).RetryAttempt(ctx, analysisID, workerAttemptID)
+	var result db.AiAnalysis
+	err := w.store.Run(ctx, func(ctx context.Context, q StateQueries) error {
+		var err error
+		result, err = q.RetryAnalysis(ctx, analysisID, workerAttemptID)
+		return err
+	})
+	return result, err
 }
 
 // TechnicalExhaustion stores a result-less FAILED attempt, leaves
@@ -240,91 +252,103 @@ func (w *Worker) finalize(
 	caseID, analysisID, workerAttemptID pgtype.UUID,
 	input finalizeInput,
 ) (Outcome, error) {
-	if w == nil || w.database == nil {
+	if w == nil || w.store == nil {
 		return "", ErrNotConfigured
 	}
 	if !validUUID(caseID) || !validUUID(analysisID) || !validUUID(workerAttemptID) {
 		return "", ErrInvalidMessage
 	}
 
-	tx, err := w.database.Begin(ctx)
+	var outcome Outcome
+	err := w.store.Run(ctx, func(ctx context.Context, q StateQueries) error {
+		analysis, err := q.GetAnalysisForUpdate(ctx, analysisID)
+		if err != nil {
+			return err
+		}
+		if !sameUUID(analysis.CaseID, caseID) {
+			return ErrInvalidMessage
+		}
+		storedCase, err := q.GetCaseForUpdate(ctx, caseID)
+		if err != nil {
+			return err
+		}
+		if terminalAnalysis(analysis.Status) {
+			outcome = AlreadyFinalized
+			return nil
+		}
+		if analysis.Status != "GENERATING" || !sameUUID(analysis.WorkerAttemptID, workerAttemptID) || storedCase.Status != string(workflow.StateAIAnalysis) {
+			return ErrStaleClaim
+		}
+		nextState, err := workflow.Transition(workflow.State(storedCase.Status), input.event)
+		if err != nil {
+			return err
+		}
+		switch {
+		case input.success != nil:
+			_, err = q.FinalizeCompleted(ctx, analysisID, workerAttemptID, *input.success)
+		case input.failure != nil:
+			_, err = q.FinalizeFailed(ctx, analysisID, workerAttemptID, input.failure)
+		default:
+			_, err = q.FinalizeFailed(ctx, analysisID, workerAttemptID, nil)
+		}
+		if err != nil {
+			if errors.Is(err, analysisrepo.ErrStaleClaim) {
+				return ErrStaleClaim
+			}
+			return err
+		}
+		auditID, err := newUUID()
+		if err != nil {
+			return fmt.Errorf("generate audit event ID: %w", err)
+		}
+		if _, err := q.AppendCaseAuditEvent(ctx, db.AppendCaseAuditEventParams{ID: auditID, CaseID: caseID, EventType: input.auditEvent, AnalysisID: analysisID, Metadata: []byte(`{}`)}); err != nil {
+			return err
+		}
+		if _, err := q.UpdateCaseStatus(ctx, db.UpdateCaseStatusParams{ID: caseID, Status: string(nextState)}); err != nil {
+			return err
+		}
+		outcome = Finalized
+		return nil
+	})
+	return outcome, err
+}
+
+type postgresStateStore struct{ database Database }
+
+func (s postgresStateStore) Run(ctx context.Context, fn func(context.Context, StateQueries) error) error {
+	if s.database == nil {
+		return ErrNotConfigured
+	}
+	tx, err := s.database.Begin(ctx)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	q := db.New(tx)
+	state := &postgresState{tx: tx, Queries: db.New(tx)}
+	if err := fn(ctx, state); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
 
-	analysis, err := q.GetAnalysisForUpdate(ctx, analysisID)
-	if err != nil {
-		return "", err
-	}
-	if !sameUUID(analysis.CaseID, caseID) {
-		return "", ErrInvalidMessage
-	}
-	storedCase, err := q.GetCaseForUpdate(ctx, caseID)
-	if err != nil {
-		return "", err
-	}
-	if terminalAnalysis(analysis.Status) {
-		if err := tx.Commit(ctx); err != nil {
-			return "", err
-		}
-		return AlreadyFinalized, nil
-	}
-	if analysis.Status != "GENERATING" ||
-		!sameUUID(analysis.WorkerAttemptID, workerAttemptID) ||
-		storedCase.Status != string(workflow.StateAIAnalysis) {
-		return "", ErrStaleClaim
-	}
+type postgresState struct {
+	tx pgx.Tx
+	*db.Queries
+}
 
-	nextState, err := workflow.Transition(workflow.State(storedCase.Status), input.event)
-	if err != nil {
-		return "", err
-	}
-	repository := analysisrepo.New(tx)
-	switch {
-	case input.success != nil:
-		_, err = repository.FinalizeCompleted(
-			ctx, analysisID, workerAttemptID,
-			input.success.Candidate, input.success.Verification, input.success.Provenance,
-		)
-	case input.failure != nil:
-		_, err = repository.FinalizeFailed(
-			ctx, analysisID, workerAttemptID,
-			&input.failure.Candidate, &input.failure.Verification, input.failure.Provenance,
-		)
-	default:
-		_, err = repository.FinalizeFailed(ctx, analysisID, workerAttemptID, nil, nil, nil)
-	}
-	if err != nil {
-		if errors.Is(err, analysisrepo.ErrStaleClaim) {
-			return "", ErrStaleClaim
-		}
-		return "", err
-	}
+func (s *postgresState) RetryAnalysis(ctx context.Context, analysisID, attemptID pgtype.UUID) (db.AiAnalysis, error) {
+	return analysisrepo.New(s.tx).RetryAttempt(ctx, analysisID, attemptID)
+}
 
-	auditID, err := newUUID()
-	if err != nil {
-		return "", fmt.Errorf("generate audit event ID: %w", err)
+func (s *postgresState) FinalizeCompleted(ctx context.Context, analysisID, attemptID pgtype.UUID, result SuccessResult) (db.AiAnalysis, error) {
+	return analysisrepo.New(s.tx).FinalizeCompleted(ctx, analysisID, attemptID, result.Candidate, result.Verification, result.Provenance)
+}
+
+func (s *postgresState) FinalizeFailed(ctx context.Context, analysisID, attemptID pgtype.UUID, failed *FailedCandidate) (db.AiAnalysis, error) {
+	if failed == nil {
+		return analysisrepo.New(s.tx).FinalizeFailed(ctx, analysisID, attemptID, nil, nil, nil)
 	}
-	if _, err := q.AppendCaseAuditEvent(ctx, db.AppendCaseAuditEventParams{
-		ID:         auditID,
-		CaseID:     caseID,
-		EventType:  input.auditEvent,
-		AnalysisID: analysisID,
-		Metadata:   []byte(`{}`),
-	}); err != nil {
-		return "", err
-	}
-	if _, err := q.UpdateCaseStatus(ctx, db.UpdateCaseStatusParams{
-		ID: caseID, Status: string(nextState),
-	}); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return "", err
-	}
-	return Finalized, nil
+	return analysisrepo.New(s.tx).FinalizeFailed(ctx, analysisID, attemptID, &failed.Candidate, &failed.Verification, failed.Provenance)
 }
 
 func leaseSecondsFromEnv() int64 {

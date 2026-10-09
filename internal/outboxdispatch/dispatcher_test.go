@@ -67,9 +67,9 @@ func (p *fakePublisher) Publish(_ context.Context, id string, _ []byte) error {
 	return p.err
 }
 
-type fakeFactory struct{ tx txStore }
+type fakeFactory struct{ tx TxStore }
 
-func (f fakeFactory) Begin(context.Context) (txStore, error) { return f.tx, nil }
+func (f fakeFactory) Begin(context.Context) (TxStore, error) { return f.tx, nil }
 
 type fakeTx struct {
 	events  []db.OutboxEvent
@@ -98,7 +98,7 @@ func (f *fakeTx) Rollback(context.Context) error {
 	return nil
 }
 
-func testDispatcher(tx txStore, publisher Publisher) *Dispatcher {
+func testDispatcher(tx TxStore, publisher Publisher) *Dispatcher {
 	return &Dispatcher{factory: fakeFactory{tx: tx}, publisher: publisher, batchSize: 20, pollInterval: time.Millisecond}
 }
 
