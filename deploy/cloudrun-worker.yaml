@@ -1,0 +1,79 @@
+apiVersion: run.googleapis.com/v1
+kind: WorkerPool
+metadata:
+  name: sentinel-worker
+  namespace: PROJECT_NUMBER
+  labels:
+    cloud.googleapis.com/location: REGION
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+    run.googleapis.com/manualInstanceCount: "1"
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/cloudsql-instances: PROJECT:REGION:CLOUD_SQL_INSTANCE
+        run.googleapis.com/network-interfaces: '[{"network":"NETWORK","subnetwork":"SUBNET"}]'
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+    spec:
+      serviceAccountName: sentinel-runtime@PROJECT.iam.gserviceaccount.com
+      containers:
+        - name: sentinel-worker
+          image: REGION-docker.pkg.dev/PROJECT/REPOSITORY/sentinel-api:TAG
+          command:
+            - /app/sentinel-worker
+          env:
+            - name: APP_ENV
+              value: production
+            - name: APP_PORT
+              value: "8080"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sentinel-database-url
+                  key: latest
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sentinel-rabbitmq-url
+                  key: latest
+            - name: RABBITMQ_AI_QUEUE
+              value: sentinel.ai_analysis
+            - name: FIREBASE_PROJECT_ID
+              value: PROJECT
+            - name: GCP_PROJECT_ID
+              value: PROJECT
+            - name: GCP_REGION
+              value: REGION
+            - name: GCS_BUCKET
+              value: SENTINEL_GCS_BUCKET
+            - name: GCS_SIGNED_URL_TTL_SECONDS
+              value: "900"
+            - name: GCS_SERVICE_ACCOUNT_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: sentinel-gcs-signer-json
+                  key: latest
+            - name: VERTEX_AI_LOCATION
+              value: REGION
+            - name: VERTEX_AI_MODEL
+              value: gemini-2.5-flash
+            - name: VERTEX_EMBEDDING_MODEL
+              value: gemini-embedding-001
+            - name: MAX_REANALYSIS
+              value: "3"
+            - name: AI_TECHNICAL_MAX_RETRIES
+              value: "3"
+            - name: POLICY_RETRIEVAL_TOP_K
+              value: "8"
+            - name: POLICY_INDEX_LEASE_SECONDS
+              value: "900"
+            - name: AI_WORKER_LEASE_SECONDS
+              value: "300"
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+  instanceSplits:
+    - percent: 100
+      latestRevision: true
