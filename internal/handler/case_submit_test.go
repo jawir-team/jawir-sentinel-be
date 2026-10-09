@@ -184,6 +184,56 @@ func TestSubmitCaseSoDViolation(t *testing.T) {
 	assertCaseTypeAPIError(t, response, http.StatusForbidden, httpapi.CodeSegregationOfDutiesViolation)
 }
 
+func TestSubmitCaseRequiresExactlyOneActiveMakerMatchingOwner(t *testing.T) {
+	actor := caseTestUser(auth.SystemRoleAdmin)
+	tests := []struct {
+		name   string
+		mutate func(*fakeSubmitTxQueries)
+	}{
+		{
+			name: "no active maker",
+			mutate: func(queries *fakeSubmitTxQueries) {
+				queries.participants[0].Status = "INACTIVE"
+			},
+		},
+		{
+			name: "active maker is not owner",
+			mutate: func(queries *fakeSubmitTxQueries) {
+				queries.caseResult.OwnerID = handlerTestUUID(10)
+			},
+		},
+		{
+			name: "multiple active makers",
+			mutate: func(queries *fakeSubmitTxQueries) {
+				queries.participants = append(queries.participants, db.CaseParticipant{
+					ID: handlerTestUUID(14), CaseID: queries.caseResult.ID,
+					UserID: handlerTestUUID(10), Role: "MAKER", Required: true, Status: "ACTIVE",
+				})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			queries := submitTestQueries(actor)
+			tt.mutate(queries)
+
+			response := serveSubmitCase(actor, queries)
+
+			assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeCardinalityViolation)
+			if queries.updateCalls != 0 || queries.analysisCalls != 0 || queries.outboxCalls != 0 || queries.auditCalls != 0 {
+				t.Fatalf(
+					"side effects = update %d, analysis %d, outbox %d, audit %d; want all zero",
+					queries.updateCalls,
+					queries.analysisCalls,
+					queries.outboxCalls,
+					queries.auditCalls,
+				)
+			}
+		})
+	}
+}
+
 func TestSubmitCaseSuccess(t *testing.T) {
 	actor := caseTestUser(auth.SystemRoleUser)
 	queries := submitTestQueries(actor)

@@ -320,13 +320,29 @@ func TestUnassignCaseParticipant(t *testing.T) {
 		}
 	})
 
-	t.Run("non-DRAFT case returns conflict", func(t *testing.T) {
-		queries := participantTestQueries(actor)
-		queries.caseResult.Status = "SUBMITTED"
-		response := serveUnassignParticipant(actor, participantID, queries)
+	for _, status := range []string{
+		"SUBMITTED",
+		"AI_ANALYSIS",
+		"CHECKING",
+		"SIGNING",
+		"EXECUTION",
+		"ESCALATION_REQUIRED",
+	} {
+		t.Run("participant set is frozen in "+status, func(t *testing.T) {
+			queries := participantTestQueries(actor)
+			queries.caseResult.Status = status
+			response := serveUnassignParticipant(actor, participantID, queries)
 
-		assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeConflict)
-	})
+			assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeConflict)
+			if queries.unassignCalls != 0 || queries.auditCalls != 0 {
+				t.Fatalf(
+					"side effects = unassign %d, audit %d; want all zero",
+					queries.unassignCalls,
+					queries.auditCalls,
+				)
+			}
+		})
+	}
 
 	t.Run("successful unassignment returns participant and writes audit", func(t *testing.T) {
 		queries := participantTestQueries(actor)

@@ -23,6 +23,66 @@ var allEvents = []Event{
 	EventClose,
 }
 
+var allStates = []State{
+	StateDraft,
+	StateSubmitted,
+	StateAIAnalysis,
+	StateChecking,
+	StateSigning,
+	StateExecution,
+	StateDone,
+	StateClosed,
+	StateEscalationRequired,
+}
+
+func TestLockedTransitionMatrix(t *testing.T) {
+	legal := map[transitionKey]State{
+		{StateDraft, EventSubmit}:                      StateSubmitted,
+		{StateSubmitted, EventStartAnalysis}:           StateAIAnalysis,
+		{StateAIAnalysis, EventAnalysisSuccess}:        StateChecking,
+		{StateAIAnalysis, EventAnalysisFailed}:         StateEscalationRequired,
+		{StateAIAnalysis, EventReanalysisLimitReached}: StateEscalationRequired,
+		{StateChecking, EventAllCheckersApproved}:      StateSigning,
+		{StateChecking, EventCheckerRejected}:          StateAIAnalysis,
+		{StateSigning, EventSignerApproved}:            StateExecution,
+		{StateSigning, EventSignerRejected}:            StateAIAnalysis,
+		{StateExecution, EventExecutionSuccess}:        StateDone,
+		{StateExecution, EventExecutionBlocked}:        StateAIAnalysis,
+		{StateExecution, EventExecutionFailed}:         StateAIAnalysis,
+		{StateDraft, EventClose}:                       StateClosed,
+		{StateSubmitted, EventClose}:                   StateClosed,
+		{StateAIAnalysis, EventClose}:                  StateClosed,
+		{StateChecking, EventClose}:                    StateClosed,
+		{StateSigning, EventClose}:                     StateClosed,
+		{StateExecution, EventClose}:                   StateClosed,
+		{StateEscalationRequired, EventClose}:          StateClosed,
+	}
+	if !reflect.DeepEqual(transitionTable, legal) {
+		t.Fatalf("transitionTable = %#v, want locked matrix %#v", transitionTable, legal)
+	}
+
+	for _, from := range allStates {
+		for _, event := range allEvents {
+			from, event := from, event
+			t.Run(string(from)+"/"+string(event), func(t *testing.T) {
+				want, allowed := legal[transitionKey{from: from, event: event}]
+				if !allowed {
+					assertInvalidTransition(t, from, event)
+					return
+				}
+
+				got, err := Transition(from, event)
+				if err != nil {
+					t.Fatalf("Transition(%q, %q) error = %v", from, event, err)
+				}
+				if got != want {
+					t.Fatalf("Transition(%q, %q) = %q, want %q", from, event, got, want)
+				}
+			})
+		}
+	}
+}
+
 func TestLockedTransitions(t *testing.T) {
 	tests := []struct {
 		name  string

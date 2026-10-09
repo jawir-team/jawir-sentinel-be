@@ -219,45 +219,57 @@ func TestCreateUserReturnsConflictForDuplicateIdentity(t *testing.T) {
 	}
 }
 
-func TestUpdateUserRejectsDemotingLastActiveAdmin(t *testing.T) {
+func TestUpdateUserRejectsChangingLastActiveAdmin(t *testing.T) {
 	targetID := handlerTestUUID(4)
-	store := &fakeUserAPIStore{
-		storedUser: db.User{
-			ID:          targetID,
-			UnitID:      handlerTestUUID(2),
-			FirebaseUID: "firebase-admin-private",
-			Name:        "Last Admin",
-			Email:       "admin@example.test",
-			Status:      "ACTIVE",
-			SystemRole:  auth.SystemRoleAdmin,
-		},
-		adminCount: 1,
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "demotion", body: `{"system_role":"USER"}`},
+		{name: "inactivation", body: `{"status":"INACTIVE"}`},
 	}
-	router := chi.NewRouter()
-	router.With(auth.RequireAdmin).Patch("/{id}", handler.UpdateUser(store))
-	request := httptest.NewRequest(
-		http.MethodPatch,
-		"/"+uuidString(targetID),
-		strings.NewReader(`{"system_role":"USER"}`),
-	)
-	request.Header.Set("Content-Type", "application/json")
-	request = request.WithContext(auth.WithUser(request.Context(), auth.User{
-		ID:         handlerTestUUID(9),
-		SystemRole: auth.SystemRoleAdmin,
-	}))
-	response := httptest.NewRecorder()
 
-	router.ServeHTTP(response, request)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeUserAPIStore{
+				storedUser: db.User{
+					ID:          targetID,
+					UnitID:      handlerTestUUID(2),
+					FirebaseUID: "firebase-admin-private",
+					Name:        "Last Admin",
+					Email:       "admin@example.test",
+					Status:      "ACTIVE",
+					SystemRole:  auth.SystemRoleAdmin,
+				},
+				adminCount: 1,
+			}
+			router := chi.NewRouter()
+			router.With(auth.RequireAdmin).Patch("/{id}", handler.UpdateUser(store))
+			request := httptest.NewRequest(
+				http.MethodPatch,
+				"/"+uuidString(targetID),
+				strings.NewReader(tt.body),
+			)
+			request.Header.Set("Content-Type", "application/json")
+			request = request.WithContext(auth.WithUser(request.Context(), auth.User{
+				ID:         handlerTestUUID(9),
+				SystemRole: auth.SystemRoleAdmin,
+			}))
+			response := httptest.NewRecorder()
 
-	assertUserAPIError(t, response, http.StatusConflict, httpapi.CodeConflict)
-	if store.getCalls != 1 || store.gotUserID != targetID {
-		t.Errorf("GetUser calls = %d, ID = %+v; want 1 with %+v", store.getCalls, store.gotUserID, targetID)
-	}
-	if store.countCalls != 1 {
-		t.Errorf("CountActiveAdmins calls = %d, want 1", store.countCalls)
-	}
-	if store.updateCalls != 0 {
-		t.Errorf("UpdateUser calls = %d, want 0", store.updateCalls)
+			router.ServeHTTP(response, request)
+
+			assertUserAPIError(t, response, http.StatusConflict, httpapi.CodeConflict)
+			if store.getCalls != 1 || store.gotUserID != targetID {
+				t.Errorf("GetUser calls = %d, ID = %+v; want 1 with %+v", store.getCalls, store.gotUserID, targetID)
+			}
+			if store.countCalls != 1 {
+				t.Errorf("CountActiveAdmins calls = %d, want 1", store.countCalls)
+			}
+			if store.updateCalls != 0 {
+				t.Errorf("UpdateUser calls = %d, want 0", store.updateCalls)
+			}
+		})
 	}
 }
 

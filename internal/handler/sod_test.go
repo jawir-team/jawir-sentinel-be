@@ -104,3 +104,46 @@ func TestAssignCaseParticipantRejectsLatentSoDViolation(t *testing.T) {
 		t.Errorf("AppendCaseAuditEvent calls = %d, want 0", queries.auditCalls)
 	}
 }
+
+func TestAssignCaseParticipantRejectsEverySecondActiveRole(t *testing.T) {
+	actor := auth.User{ID: handlerTestUUID(9), SystemRole: auth.SystemRoleUser}
+	caseID := handlerTestUUID(4)
+	targetUserID := handlerTestUUID(8)
+	tests := []struct {
+		name     string
+		existing string
+		assigned string
+	}{
+		{name: "Maker-Checker", existing: "MAKER", assigned: "CHECKER"},
+		{name: "Maker-Signer", existing: "MAKER", assigned: "SIGNER"},
+		{name: "Maker-Executer", existing: "MAKER", assigned: "EXECUTER"},
+		{name: "Checker-Signer", existing: "CHECKER", assigned: "SIGNER"},
+		{name: "Checker-Executer", existing: "CHECKER", assigned: "EXECUTER"},
+		{name: "Signer-Executer", existing: "SIGNER", assigned: "EXECUTER"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			queries := participantTestQueries(actor)
+			queries.participants = append(queries.participants, db.CaseParticipant{
+				ID: handlerTestUUID(11), CaseID: caseID, UserID: targetUserID,
+				Role: tt.existing, Status: "ACTIVE",
+			})
+			response := serveAssignParticipant(
+				actor,
+				`{"user_id":"00000000-0000-0000-0000-000000000008","role":"`+tt.assigned+`"}`,
+				queries,
+			)
+
+			assertCaseTypeAPIError(t, response, http.StatusConflict, httpapi.CodeConflict)
+			if queries.createCalls != 0 || queries.reactivateCalls != 0 || queries.auditCalls != 0 {
+				t.Fatalf(
+					"side effects = create %d, reactivate %d, audit %d; want all zero",
+					queries.createCalls,
+					queries.reactivateCalls,
+					queries.auditCalls,
+				)
+			}
+		})
+	}
+}
