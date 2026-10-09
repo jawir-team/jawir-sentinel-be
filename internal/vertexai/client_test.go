@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -309,27 +310,19 @@ func TestConfigFromEnv(t *testing.T) {
 		t.Errorf("config = %#v", config)
 	}
 
-	t.Run("invalid retries use default", func(t *testing.T) {
+	t.Run("invalid retries fail", func(t *testing.T) {
 		setRequiredEnv(t)
 		t.Setenv("AI_TECHNICAL_MAX_RETRIES", "invalid")
-		config, err := ConfigFromEnv()
-		if err != nil {
-			t.Fatalf("ConfigFromEnv() error = %v", err)
-		}
-		if config.MaxRetries != DefaultTechnicalMaxRetries {
-			t.Errorf("MaxRetries = %d, want %d", config.MaxRetries, DefaultTechnicalMaxRetries)
+		if _, err := ConfigFromEnv(); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("ConfigFromEnv() error = %v, want ErrInvalidConfig", err)
 		}
 	})
 
-	t.Run("retry range is clamped", func(t *testing.T) {
+	t.Run("retry range fails", func(t *testing.T) {
 		setRequiredEnv(t)
 		t.Setenv("AI_TECHNICAL_MAX_RETRIES", "99")
-		config, err := ConfigFromEnv()
-		if err != nil {
-			t.Fatalf("ConfigFromEnv() error = %v", err)
-		}
-		if config.MaxRetries != MaxTechnicalMaxRetries {
-			t.Errorf("MaxRetries = %d, want %d", config.MaxRetries, MaxTechnicalMaxRetries)
+		if _, err := ConfigFromEnv(); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("ConfigFromEnv() error = %v, want ErrInvalidConfig", err)
 		}
 	})
 }
@@ -425,7 +418,22 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VERTEX_AI_LOCATION", "asia-southeast1")
 	t.Setenv("VERTEX_AI_MODEL", "gemini-test")
 	t.Setenv("VERTEX_EMBEDDING_MODEL", "embedding-test")
-	t.Setenv("AI_TECHNICAL_MAX_RETRIES", "")
+	unsetTestEnv(t, "AI_TECHNICAL_MAX_RETRIES")
+}
+
+func unsetTestEnv(t *testing.T, name string) {
+	t.Helper()
+	old, existed := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("unset %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(name, old)
+			return
+		}
+		_ = os.Unsetenv(name)
+	})
 }
 
 func writeGeneratedText(t *testing.T, w http.ResponseWriter, text string) {

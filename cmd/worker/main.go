@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -18,7 +16,6 @@ import (
 	"github.com/jawir-team/jawir-sentinel-be/internal/logging"
 	"github.com/jawir-team/jawir-sentinel-be/internal/outboxdispatch"
 	"github.com/jawir-team/jawir-sentinel-be/internal/rabbitmq"
-	"github.com/jawir-team/jawir-sentinel-be/internal/vertexai"
 )
 
 func main() {
@@ -71,7 +68,7 @@ func run() error {
 	// methods. Until that adapter is supplied, deliveries are NACKed before a
 	// database claim is created, while the outbox dispatcher remains active.
 	var executor aiconsumer.Executor
-	processor := aiconsumer.New(aiworker.NewWithLeaseSeconds(pool, cfg.AIWorkerLeaseSeconds), executor, technicalMaxRetries())
+	processor := aiconsumer.New(aiworker.NewWithLeaseSeconds(pool, cfg.AIWorkerLeaseSeconds), executor, cfg.TechnicalMaxRetries)
 
 	workerCtx, cancelWorker := context.WithCancel(ctx)
 	defer cancelWorker()
@@ -93,22 +90,4 @@ func run() error {
 		}
 		return err
 	}
-}
-
-func technicalMaxRetries() int {
-	raw := strings.TrimSpace(os.Getenv("AI_TECHNICAL_MAX_RETRIES"))
-	if raw == "" {
-		return vertexai.DefaultTechnicalMaxRetries
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return vertexai.DefaultTechnicalMaxRetries
-	}
-	if value < 0 {
-		return 0
-	}
-	if value > vertexai.MaxTechnicalMaxRetries {
-		return vertexai.MaxTechnicalMaxRetries
-	}
-	return value
 }

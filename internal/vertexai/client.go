@@ -13,17 +13,16 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	appconfig "github.com/jawir-team/jawir-sentinel-be/internal/config"
 	"github.com/jawir-team/jawir-sentinel-be/internal/logging"
 )
 
 const (
-	DefaultTechnicalMaxRetries = 3
-	MaxTechnicalMaxRetries     = 10
+	DefaultTechnicalMaxRetries = appconfig.DefaultTechnicalMaxRetries
+	MaxTechnicalMaxRetries     = appconfig.MaxTechnicalMaxRetries
 
 	maxVertexResponseBytes = 10 << 20
 	defaultBackoff         = 200 * time.Millisecond
@@ -48,26 +47,25 @@ type Config struct {
 	MaxRetries     int
 }
 
-// ConfigFromEnv loads and validates the Vertex AI configuration. A missing or
-// non-integer AI_TECHNICAL_MAX_RETRIES uses DefaultTechnicalMaxRetries; valid
-// integers are clamped to the supported range of zero through ten.
+// ConfigFromEnv loads the Vertex AI settings through the centralized process
+// configuration. Invalid explicit values fail instead of being defaulted or
+// clamped.
 func ConfigFromEnv() (Config, error) {
-	config := Config{
-		ProjectID:      strings.TrimSpace(os.Getenv("GCP_PROJECT_ID")),
-		Location:       strings.TrimSpace(os.Getenv("VERTEX_AI_LOCATION")),
-		Model:          strings.TrimSpace(os.Getenv("VERTEX_AI_MODEL")),
-		EmbeddingModel: strings.TrimSpace(os.Getenv("VERTEX_EMBEDDING_MODEL")),
-		MaxRetries:     DefaultTechnicalMaxRetries,
+	cfg, err := appconfig.LoadVertexAI()
+	if err != nil {
+		return Config{}, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
 	}
-	if raw := strings.TrimSpace(os.Getenv("AI_TECHNICAL_MAX_RETRIES")); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil {
-			config.MaxRetries = clampRetries(parsed)
-		}
+	vertexConfig := Config{
+		ProjectID:      cfg.GCPProjectID,
+		Location:       cfg.VertexAILocation,
+		Model:          cfg.VertexAIModel,
+		EmbeddingModel: cfg.VertexEmbeddingModel,
+		MaxRetries:     cfg.TechnicalMaxRetries,
 	}
-	if err := validateConfig(config); err != nil {
+	if err := validateConfig(vertexConfig); err != nil {
 		return Config{}, err
 	}
-	return config, nil
+	return vertexConfig, nil
 }
 
 // FileInput identifies a backend-validated object that Vertex AI may read.

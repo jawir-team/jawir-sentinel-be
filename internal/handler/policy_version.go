@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jawir-team/jawir-sentinel-be/internal/auth"
+	"github.com/jawir-team/jawir-sentinel-be/internal/config"
 	db "github.com/jawir-team/jawir-sentinel-be/internal/db/sqlc"
 	"github.com/jawir-team/jawir-sentinel-be/internal/httpapi"
 	"github.com/jawir-team/jawir-sentinel-be/internal/logging"
@@ -23,8 +23,20 @@ import (
 const (
 	maxCreatePolicyVersionBodyBytes = 1 << 20
 	policyVersionEventCreated       = "POLICY_VERSION_CREATED"
-	defaultPolicyIndexLeaseSeconds  = int64(900)
 )
+
+var configuredPolicyIndexLease = time.Duration(config.DefaultPolicyIndexLeaseSeconds) * time.Second
+
+// SetPolicyIndexLeaseSeconds applies the startup-validated policy indexing
+// lease before handlers begin serving requests.
+func SetPolicyIndexLeaseSeconds(seconds int64) error {
+	maxSeconds := int64(time.Duration(1<<63-1) / time.Second)
+	if seconds <= 0 || seconds > maxSeconds {
+		return fmt.Errorf("policy index lease seconds must be between 1 and %d", maxSeconds)
+	}
+	configuredPolicyIndexLease = time.Duration(seconds) * time.Second
+	return nil
+}
 
 // PolicyVersionStore is the database boundary needed by policy version
 // collection and detail handlers.
@@ -328,12 +340,7 @@ func policyVersionIndexRecoverable(version db.PolicyVersion, now time.Time) bool
 }
 
 func policyIndexLease() time.Duration {
-	seconds, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("POLICY_INDEX_LEASE_SECONDS")), 10, 64)
-	maxSeconds := int64(time.Duration(1<<63-1) / time.Second)
-	if err != nil || seconds <= 0 || seconds > maxSeconds {
-		seconds = defaultPolicyIndexLeaseSeconds
-	}
-	return time.Duration(seconds) * time.Second
+	return configuredPolicyIndexLease
 }
 
 func writeInvalidPolicyVersionRequest(w http.ResponseWriter, message string) {

@@ -50,8 +50,11 @@ func run() error {
 	}
 	queries := db.New(pool)
 	txStore := handler.NewTxQueries(pool)
-	reanalysisService := reanalysis.New(pool)
-	fileStorage := storage.NewFromEnv()
+	reanalysisService := reanalysis.New(pool, cfg.MaxReanalysis)
+	fileStorage := storage.New(cfg.GCSBucket)
+	if err := handler.SetPolicyIndexLeaseSeconds(cfg.PolicyIndexLeaseSeconds); err != nil {
+		return err
+	}
 	server, err := newServerWithStores(cfg.AppPort, verifier, queries, queries, queries, queries, txStore, txStore, reanalysisService, queries, fileStorage, queries)
 	if err != nil {
 		return err

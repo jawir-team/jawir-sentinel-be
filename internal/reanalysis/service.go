@@ -9,18 +9,17 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jawir-team/jawir-sentinel-be/internal/config"
 	db "github.com/jawir-team/jawir-sentinel-be/internal/db/sqlc"
 	"github.com/jawir-team/jawir-sentinel-be/internal/workflow"
 )
 
 const (
-	DefaultMaxReanalysis = int32(3)
+	DefaultMaxReanalysis = config.DefaultMaxReanalysis
 
 	analysisStatusGenerating = "GENERATING"
 	auditAnalysisStarted     = "AI_ANALYSIS_STARTED"
@@ -99,13 +98,12 @@ func NewWithRunner(runner TransactionRunner, maxReanalysis int32) *Service {
 	return &Service{runner: runner, maxReanalysis: maxReanalysis}
 }
 
-// New creates an orchestrator using MAX_REANALYSIS. Missing, malformed, or
-// negative values use DefaultMaxReanalysis; zero intentionally disables all
-// re-analysis cycles.
-func New(database Database) *Service {
+// New creates an orchestrator with the startup-validated re-analysis quota.
+// Zero intentionally disables all re-analysis cycles.
+func New(database Database, maxReanalysis int32) *Service {
 	return &Service{
 		runner:        pgxTransactionRunner{database: database},
-		maxReanalysis: maxReanalysisFromEnv(),
+		maxReanalysis: maxReanalysis,
 	}
 }
 
@@ -315,18 +313,6 @@ func (r pgxTransactionRunner) Run(
 		return fmt.Errorf("commit reanalysis transaction: %w", err)
 	}
 	return nil
-}
-
-func maxReanalysisFromEnv() int32 {
-	raw := strings.TrimSpace(os.Getenv("MAX_REANALYSIS"))
-	if raw == "" {
-		return DefaultMaxReanalysis
-	}
-	parsed, err := strconv.ParseInt(raw, 10, 32)
-	if err != nil || parsed < 0 {
-		return DefaultMaxReanalysis
-	}
-	return int32(parsed)
 }
 
 func supportedTrigger(event workflow.Event) bool {

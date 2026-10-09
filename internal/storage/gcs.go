@@ -37,11 +37,11 @@ type gcsStore struct {
 
 var _ Store = (*gcsStore)(nil)
 
-// NewFromEnv configures Google Cloud Storage from environment variables. A
+// New configures Google Cloud Storage with the startup-validated bucket. A
 // missing bucket disables file storage; other configuration errors are kept
 // and returned by the operation that needs the invalid setting.
-func NewFromEnv() Store {
-	bucket := strings.TrimSpace(os.Getenv("GCS_BUCKET"))
+func New(bucket string) Store {
+	bucket = strings.TrimSpace(bucket)
 	if bucket == "" {
 		return nil
 	}

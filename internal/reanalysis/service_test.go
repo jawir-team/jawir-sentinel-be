@@ -237,29 +237,6 @@ func TestRerunCannotCreateDuplicateAnalysisOrOutbox(t *testing.T) {
 	}
 }
 
-func TestMaxReanalysisFromEnv(t *testing.T) {
-	tests := []struct {
-		name string
-		raw  string
-		want int32
-	}{
-		{name: "default", raw: "", want: DefaultMaxReanalysis},
-		{name: "configured", raw: "5", want: 5},
-		{name: "disabled", raw: "0", want: 0},
-		{name: "negative", raw: "-1", want: DefaultMaxReanalysis},
-		{name: "malformed", raw: "many", want: DefaultMaxReanalysis},
-		{name: "overflow", raw: "2147483648", want: DefaultMaxReanalysis},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("MAX_REANALYSIS", tt.raw)
-			if got := maxReanalysisFromEnv(); got != tt.want {
-				t.Fatalf("maxReanalysisFromEnv() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
 func newFakeRunner(state workflow.State, latest int32) *fakeRunner {
 	return &fakeRunner{
 		latest: latest,

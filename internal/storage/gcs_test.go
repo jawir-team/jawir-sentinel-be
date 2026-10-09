@@ -6,10 +6,9 @@ import (
 	"time"
 )
 
-func TestNewFromEnvReturnsNilWithoutBucket(t *testing.T) {
-	t.Setenv("GCS_BUCKET", "   ")
-	if store := NewFromEnv(); store != nil {
-		t.Fatalf("NewFromEnv() = %T, want nil when GCS_BUCKET is empty", store)
+func TestNewReturnsNilWithoutBucket(t *testing.T) {
+	if store := New("   "); store != nil {
+		t.Fatalf("New() = %T, want nil when GCS_BUCKET is empty", store)
 	}
 }
 

@@ -15,6 +15,12 @@ worker pool runs the outbox dispatcher + RabbitMQ consumer continuously.
 > reachable Cloud SQL / RabbitMQ / GCS / Vertex AI. Nothing here
 > auto-deploys from CI without those credentials.
 
+Both binaries validate their environment before opening database, broker, or
+HTTP resources. Explicit invalid numeric tuning values fail startup rather than
+falling back silently; unset optional values retain the defaults documented in
+`.env.example`. `GCP_PROJECT_ID`, `VERTEX_AI_LOCATION`, and `VERTEX_AI_MODEL`
+are required.
+
 ## 1. Build and push the image
 
 ```bash
