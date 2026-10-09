@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	DefaultLeaseSeconds = int64(120)
+	DefaultLeaseSeconds = int64(300)
 
 	outboxEventAnalysisRequested = "AI_ANALYSIS_REQUESTED"
 	auditAnalysisCompleted       = "AI_ANALYSIS_COMPLETED"
@@ -57,8 +57,9 @@ const (
 )
 
 type ClaimResult struct {
-	Outcome         Outcome
-	WorkerAttemptID pgtype.UUID
+	Outcome             Outcome
+	WorkerAttemptID     pgtype.UUID
+	TechnicalRetryCount int32
 }
 
 type SuccessResult struct {
@@ -79,9 +80,17 @@ type Worker struct {
 }
 
 // New reads AI_WORKER_LEASE_SECONDS. Missing, invalid, non-positive, or
-// overflowing values use the 120-second default.
+// overflowing values use the 300-second default.
 func New(database Database) *Worker {
-	return &Worker{database: database, leaseSeconds: float64(leaseSecondsFromEnv())}
+	return NewWithLeaseSeconds(database, int(leaseSecondsFromEnv()))
+}
+
+// NewWithLeaseSeconds uses an already-validated process configuration value.
+func NewWithLeaseSeconds(database Database, leaseSeconds int) *Worker {
+	if leaseSeconds <= 0 {
+		leaseSeconds = int(DefaultLeaseSeconds)
+	}
+	return &Worker{database: database, leaseSeconds: float64(leaseSeconds)}
 }
 
 // Claim owns only the short database phase. It commits before returning
@@ -126,7 +135,7 @@ func (w *Worker) Claim(
 	}
 
 	if terminalAnalysis(analysis.Status) {
-		result := ClaimResult{Outcome: AlreadyFinalized, WorkerAttemptID: analysis.WorkerAttemptID}
+		result := ClaimResult{Outcome: AlreadyFinalized, WorkerAttemptID: analysis.WorkerAttemptID, TechnicalRetryCount: analysis.TechnicalRetryCount}
 		if err := tx.Commit(ctx); err != nil {
 			return ClaimResult{}, err
 		}
@@ -143,7 +152,7 @@ func (w *Worker) Claim(
 		return ClaimResult{}, err
 	}
 	if active {
-		result := ClaimResult{Outcome: Duplicate, WorkerAttemptID: analysis.WorkerAttemptID}
+		result := ClaimResult{Outcome: Duplicate, WorkerAttemptID: analysis.WorkerAttemptID, TechnicalRetryCount: analysis.TechnicalRetryCount}
 		if err := tx.Commit(ctx); err != nil {
 			return ClaimResult{}, err
 		}
@@ -160,7 +169,7 @@ func (w *Worker) Claim(
 	if err != nil {
 		return ClaimResult{}, err
 	}
-	result := ClaimResult{Outcome: Claimed, WorkerAttemptID: claimed.WorkerAttemptID}
+	result := ClaimResult{Outcome: Claimed, WorkerAttemptID: claimed.WorkerAttemptID, TechnicalRetryCount: claimed.TechnicalRetryCount}
 	if err := tx.Commit(ctx); err != nil {
 		return ClaimResult{}, err
 	}

@@ -2399,8 +2399,29 @@ POLICY_INDEX_LEASE_SECONDS=900
 AI_WORKER_LEASE_SECONDS=900
 
 RABBITMQ_URL=amqps://...
-RABBITMQ_AI_QUEUE=sentinel.ai.analysis
+RABBITMQ_AI_QUEUE=sentinel.ai_analysis
 ```
+
+Local durable-delivery dependencies can be started with:
+
+```bash
+docker compose up -d postgres rabbitmq
+```
+
+Run the dispatcher and AI consumer as a separate process with `go run
+./cmd/worker`. The API process does not dispatch or consume AI jobs and does
+not start process-local AI goroutines.
+
+The durable delivery, claim, retry, fencing, and finalization adapter is in
+`internal/aiconsumer`. The remaining Vertex orchestration seam is the
+`executor` argument passed to `aiconsumer.New` in `cmd/worker/main.go`. Replace
+that nil argument with an `aiconsumer.Executor` implementing this existing
+pipeline: `ai.NewBuilder(...).Build`, `ai.RenderPrompt`,
+`vertexai.Client.GenerateContent`, `ai.ParseAndValidateCandidate`, then
+`ai.VerifyCandidate`. The executor returns an `aiworker.SuccessResult` or
+`aiworker.FailedCandidate`; it must not write analysis state itself. Until it
+is supplied, the consumer NACKs deliveries before claiming them, while the
+outbox dispatcher continues to run.
 
 Credential Google Cloud menggunakan Application Default Credentials / service account.
 
