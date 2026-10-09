@@ -42,6 +42,18 @@ Backend adalah sumber kebenaran untuk:
 
 AI dan frontend tidak dapat mengubah workflow state secara langsung.
 
+## AI evaluation dataset
+
+The synthetic AI evaluation suite lives in [`internal/aieval`](internal/aieval/README.md).
+It covers every policy-status branch plus verifier warning and failure paths,
+uses only fictional Bank Nusantara Fiktif data, and compares structured
+properties rather than generated prose.
+
+Run the deterministic CI suite with `go test ./internal/aieval/...`. An
+informational live run uses the same cases when invoked with `EVAL_LIVE=1` and
+valid Vertex AI configuration plus Application Default Credentials; see the
+package README for the full command.
+
 ---
 
 ## 2. Technology Stack
